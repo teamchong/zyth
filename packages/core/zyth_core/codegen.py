@@ -495,13 +495,15 @@ class ZigCodeGenerator:
                 # Check if iterating over a list variable
                 if isinstance(comp.iter, ast.Name):
                     source_var = comp.iter.id
+                    # Generate unique index variable name for this comprehension
+                    unique_idx = f"{loop_var}_idx_{id(node.value)}"
                     # Generate for loop using range(len(source))
-                    self.emit(f"var {loop_var}_idx: i64 = 0;")
-                    self.emit(f"while ({loop_var}_idx < @as(i64, @intCast(runtime.PyList.len({source_var})))) : ({loop_var}_idx += 1) {{")
+                    self.emit(f"var {unique_idx}: i64 = 0;")
+                    self.emit(f"while ({unique_idx} < @as(i64, @intCast(runtime.PyList.len({source_var})))) : ({unique_idx} += 1) {{")
                     self.indent_level += 1
 
                     # Get item from source list
-                    self.emit(f"const {loop_var} = runtime.PyList.getItem({source_var}, @intCast({loop_var}_idx));")
+                    self.emit(f"const {loop_var} = runtime.PyList.getItem({source_var}, @intCast({unique_idx}));")
 
                     # Track loop variable as pyint (PyObject containing int)
                     self.var_types[loop_var] = "pyint"

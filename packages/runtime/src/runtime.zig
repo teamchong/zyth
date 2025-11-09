@@ -269,21 +269,21 @@ pub const PyList = struct {
         return -1;
     }
 
-    pub fn insert(obj: *PyObject, allocator: std.mem.Allocator, index: i64, value: *PyObject) !void {
+    pub fn insert(obj: *PyObject, allocator: std.mem.Allocator, idx: i64, value: *PyObject) !void {
         std.debug.assert(obj.type_id == .list);
         const data: *PyList = @ptrCast(@alignCast(obj.data));
         _ = allocator;
 
         const list_len: i64 = @intCast(data.items.items.len);
-        var idx: i64 = index;
+        var index_pos: i64 = idx;
 
         // Handle negative indices
-        if (idx < 0) idx = @max(0, list_len + idx);
+        if (index_pos < 0) index_pos = @max(0, list_len + index_pos);
 
         // Clamp to valid range
-        idx = @max(0, @min(idx, list_len));
+        index_pos = @max(0, @min(index_pos, list_len));
 
-        const insert_idx: usize = @intCast(idx);
+        const insert_idx: usize = @intCast(index_pos);
         try data.items.insert(data.allocator, insert_idx, value);
         incref(value);
     }
