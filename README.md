@@ -2,7 +2,7 @@
 
 Python to Zig compiler. Write Python, run native code.
 
-**35x faster** than CPython on fibonacci(40) | Native binaries | Zero interpreter overhead
+**28.56x faster** than CPython | Native binaries | Zero interpreter overhead
 
 ## Quick Start
 
@@ -89,23 +89,26 @@ zyth examples/fibonacci.py -o fib
 
 ## Performance
 
-| Test | CPython | Zyth | Speedup |
-|------|---------|------|---------|
-| fibonacci(30) | 96ms | 25ms | **3.9x** |
-| fibonacci(35) | 1068ms | 47ms | **22.7x** |
-| fibonacci(40) | 12187ms | 343ms | **35.6x** |
+| Benchmark | CPython | Zyth | Speedup |
+|:---|---:|---:|---:|
+| **fibonacci(35)** | 804.5 ms | 28.2 ms | **28.56x faster** 🚀 |
+| **String concat** | 23.6 ms | 1.9 ms | **12.24x faster** ⚡ |
+
+See [benchmarks/RESULTS.md](benchmarks/RESULTS.md) for detailed analysis.
 
 ## Features
 
 **Current:**
 - ✅ Function definitions with type hints
 - ✅ Integer arithmetic and recursion
+- ✅ String operations (concatenation, literals)
 - ✅ If/else statements
 - ✅ Binary compilation to native code
-- ✅ 35x performance improvement
+- ✅ 28x+ performance improvement
 
 **Roadmap:**
-- [ ] Lists, dicts, strings
+- [ ] Lists and dicts
+- [ ] For/while loops
 - [ ] Classes and methods
 - [ ] Standard library (zyth.web, zyth.http, zyth.ai)
 - [ ] WebAssembly target
