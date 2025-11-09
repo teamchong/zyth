@@ -2,7 +2,7 @@
 
 Python to Zig compiler. Write Python, run native code.
 
-**28.56x faster** than CPython | Native binaries | Zero interpreter overhead
+**Up to 41x faster** than CPython | Native binaries | Zero interpreter overhead
 
 ## Quick Start
 
@@ -91,12 +91,13 @@ zyth examples/fibonacci.py -o fib
 
 | Benchmark | CPython | Zyth | Speedup |
 |:---|---:|---:|---:|
-| **fibonacci(35)** | 804.5 ms | 28.2 ms | **28.56x faster** 🚀 |
+| **Loop sum (1M)** | 65.4 ms | 1.6 ms | **41.40x faster** 🔥 |
+| **Fibonacci(35)** | 804.5 ms | 28.2 ms | **28.56x faster** 🚀 |
 | **String concat** | 23.6 ms | 1.9 ms | **12.24x faster** ⚡ |
 
 **Benchmarked with [hyperfine](https://github.com/sharkdp/hyperfine)** on macOS ARM64.
 
-Raw results: [fibonacci_results.md](benchmarks/fibonacci_results.md) · [string_results.md](benchmarks/string_results.md)
+Raw results: [loop_sum_results.md](benchmarks/loop_sum_results.md) · [fibonacci_results.md](benchmarks/fibonacci_results.md) · [string_results.md](benchmarks/string_results.md)
 
 ## Features
 
@@ -104,13 +105,14 @@ Raw results: [fibonacci_results.md](benchmarks/fibonacci_results.md) · [string_
 - ✅ Function definitions with type hints
 - ✅ Integer arithmetic and recursion
 - ✅ String operations (concatenation, literals)
-- ✅ If/else statements
+- ✅ Control flow (if/else, while, for/range)
+- ✅ Variable reassignment detection (var vs const)
 - ✅ Binary compilation to native code
-- ✅ 28x+ performance improvement
+- ✅ 41x+ performance improvement
 
 **Roadmap:**
-- [ ] Lists and dicts
-- [ ] For/while loops
+- [ ] Lists and dicts (runtime ready, codegen needed)
+- [ ] String methods (.upper(), .lower())
 - [ ] Classes and methods
 - [ ] Standard library (zyth.web, zyth.http, zyth.ai)
 - [ ] WebAssembly target
