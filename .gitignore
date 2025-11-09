@@ -49,10 +49,12 @@ dmypy.json
 # Zig build artifacts
 zig-cache/
 zig-out/
+.zig-cache/
 
 # Compiled binaries
 output
 fib_binary
+*_zyth
 /tmp/
 
 # UV
@@ -64,4 +66,3 @@ uv.lock
 # Zyth specific
 _prototype/
 *.zig.o
-*.zig
