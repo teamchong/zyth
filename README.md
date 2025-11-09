@@ -94,7 +94,9 @@ zyth examples/fibonacci.py -o fib
 | **fibonacci(35)** | 804.5 ms | 28.2 ms | **28.56x faster** 🚀 |
 | **String concat** | 23.6 ms | 1.9 ms | **12.24x faster** ⚡ |
 
-See [benchmarks/RESULTS.md](benchmarks/RESULTS.md) for detailed analysis.
+**Benchmarked with [hyperfine](https://github.com/sharkdp/hyperfine)** on macOS ARM64.
+
+Raw results: [fibonacci_results.md](benchmarks/fibonacci_results.md) · [string_results.md](benchmarks/string_results.md)
 
 ## Features
 
