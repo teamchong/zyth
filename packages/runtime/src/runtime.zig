@@ -158,6 +158,41 @@ pub const PyList = struct {
         }
         return false;
     }
+
+    pub fn slice(obj: *PyObject, allocator: std.mem.Allocator, start_opt: ?i64, end_opt: ?i64) !*PyObject {
+        std.debug.assert(obj.type_id == .list);
+        const data: *PyList = @ptrCast(@alignCast(obj.data));
+
+        const list_len: i64 = @intCast(data.items.items.len);
+
+        // Handle defaults and bounds
+        var start: i64 = start_opt orelse 0;
+        var end: i64 = end_opt orelse list_len;
+
+        // Handle negative indices
+        if (start < 0) start = @max(0, list_len + start);
+        if (end < 0) end = @max(0, list_len + end);
+
+        // Clamp to valid range
+        start = @max(0, @min(start, list_len));
+        end = @max(start, @min(end, list_len));
+
+        // Create new list
+        const new_list = try create(allocator);
+        const new_data: *PyList = @ptrCast(@alignCast(new_list.data));
+
+        // Copy elements
+        const start_idx: usize = @intCast(start);
+        const end_idx: usize = @intCast(end);
+        var i: usize = start_idx;
+        while (i < end_idx) : (i += 1) {
+            const item = data.items.items[i];
+            try new_data.items.append(allocator, item);
+            incref(item);
+        }
+
+        return new_list;
+    }
 };
 
 /// Python string type
@@ -277,6 +312,33 @@ pub const PyString = struct {
             }
         }
         return false;
+    }
+
+    pub fn slice(obj: *PyObject, allocator: std.mem.Allocator, start_opt: ?i64, end_opt: ?i64) !*PyObject {
+        std.debug.assert(obj.type_id == .string);
+        const data: *PyString = @ptrCast(@alignCast(obj.data));
+
+        const str_len: i64 = @intCast(data.data.len);
+
+        // Handle defaults and bounds
+        var start: i64 = start_opt orelse 0;
+        var end: i64 = end_opt orelse str_len;
+
+        // Handle negative indices
+        if (start < 0) start = @max(0, str_len + start);
+        if (end < 0) end = @max(0, str_len + end);
+
+        // Clamp to valid range
+        start = @max(0, @min(start, str_len));
+        end = @max(start, @min(end, str_len));
+
+        // Extract substring
+        const start_idx: usize = @intCast(start);
+        const end_idx: usize = @intCast(end);
+        const substring = data.data[start_idx..end_idx];
+
+        // Create new string
+        return try create(allocator, substring);
     }
 };
 

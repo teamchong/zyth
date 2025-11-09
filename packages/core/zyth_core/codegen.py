@@ -554,6 +554,14 @@ class ZigCodeGenerator:
             if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
                 self.var_types[target.id] = "string"
 
+            # Track type for slicing results
+            if isinstance(node.value, ast.Subscript) and isinstance(node.value.slice, ast.Slice):
+                # If slicing a variable, copy its type
+                if isinstance(node.value.value, ast.Name):
+                    source_type = self.var_types.get(node.value.value.id)
+                    if source_type:
+                        self.var_types[target.id] = source_type
+
             # Default path
             value_code, needs_try = self.visit_expr(node.value)
             if is_first_assignment:
@@ -657,10 +665,27 @@ class ZigCodeGenerator:
 
         elif isinstance(node, ast.Subscript):
             # List/dict indexing: obj[index] or obj["key"]
+            # List/string slicing: obj[start:end]
             value_code, value_try = self.visit_expr(node.value)
 
+            # Check if it's a slice operation
+            if isinstance(node.slice, ast.Slice):
+                # Slicing: obj[start:end]
+                start_code = "null" if node.slice.lower is None else str(self.visit_expr(node.slice.lower)[0])
+                end_code = "null" if node.slice.upper is None else str(self.visit_expr(node.slice.upper)[0])
+
+                # Determine if this is list or string slicing based on var_types
+                if isinstance(node.value, ast.Name):
+                    var_name = node.value.id
+                    var_type = self.var_types.get(var_name)
+                    if var_type == "string":
+                        return (f"runtime.PyString.slice({value_code}, allocator, {start_code}, {end_code})", True)
+
+                # Default to list slicing
+                return (f"runtime.PyList.slice({value_code}, allocator, {start_code}, {end_code})", True)
+
             # Check if it's a dict access (string key) or list access (int index)
-            if isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
+            elif isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
                 # Dict access with string key
                 key_str = node.slice.value
                 return (f'runtime.PyDict.get({value_code}, "{key_str}").?', False)
