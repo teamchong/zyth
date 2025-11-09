@@ -2,27 +2,33 @@
 
 Comprehensive tests ensuring Python/Zyth output equivalence.
 
+## Structure
+
+- **`examples/`** - Demo files showing how to use Zyth (keep these!)
+- **`tests/`** - Automated tests that verify demos work correctly
+
 ## Quick Start
 
 ```bash
 # Run all tests in parallel (recommended - 5x faster)
-pytest -n auto
+pytest
 
 # Run specific test file
-pytest tests/test_examples.py -v
+pytest tests/test_regression.py -v
 
 # Run single test
-pytest tests/test_examples.py::TestExamples::test_example[fibonacci-path3] -v
+pytest tests/test_regression.py::TestExamples::test_example[fibonacci-path3] -v
 ```
 
 ## Test Files
 
-### `test_examples.py` - Demo File Tests (28 tests)
-Converts all `examples/*.py` demos into regression tests.
+### `test_regression.py` - Regression Tests (28 tests)
+Runs all `examples/*.py` files and verifies Python/Zyth output matches.
 - Auto-discovers all example files
 - Compiles each with Zyth
 - Compares Python vs Zyth output
 - **Status: 28/28 PASSING**
+- **Purpose:** Ensure demos stay working (regression testing)
 
 ### `test_string_methods.py` - String Method Tests (16 tests)
 Parameterized tests for all string methods:

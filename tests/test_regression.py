@@ -1,4 +1,12 @@
-"""Test suite that runs all example files and verifies Python/Zyth output matches"""
+"""
+Regression test suite - runs all example/*.py demo files.
+
+These tests ensure that all user-facing demos continue to work correctly.
+Each demo file is compiled with Zyth and output is compared against Python.
+
+DO NOT delete examples/ - they serve as user documentation!
+This test file just automates verification that demos work.
+"""
 import pytest
 import subprocess
 import tempfile
