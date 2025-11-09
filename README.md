@@ -93,31 +93,33 @@ zyth examples/fibonacci.py -o fib
 |:---|---:|---:|---:|
 | **Loop sum (1M)** | 65.4 ms | 1.6 ms | **41.40x faster** 🔥 |
 | **Fibonacci(35)** | 804.5 ms | 28.2 ms | **28.56x faster** 🚀 |
+| **List methods** | 22.1 ms | 1.5 ms | **14.89x faster** ⚡ |
 | **List operations** | 22.3 ms | 1.6 ms | **13.98x faster** ⚡ |
 | **String concat** | 23.6 ms | 1.9 ms | **12.24x faster** ⚡ |
 
 **Benchmarked with [hyperfine](https://github.com/sharkdp/hyperfine)** on macOS ARM64.
 
-Raw results: [loop_sum_results.md](benchmarks/loop_sum_results.md) · [fibonacci_results.md](benchmarks/fibonacci_results.md) · [list_ops_results.md](benchmarks/list_ops_results.md) · [string_results.md](benchmarks/string_results.md)
+Raw results: [loop_sum_results.md](benchmarks/loop_sum_results.md) · [fibonacci_results.md](benchmarks/fibonacci_results.md) · [list_methods_results.md](benchmarks/list_methods_results.md) · [list_ops_results.md](benchmarks/list_ops_results.md) · [string_results.md](benchmarks/string_results.md)
 
 ## Features
 
 **Current:**
 - ✅ Function definitions with type hints
 - ✅ Integer arithmetic and recursion
-- ✅ String operations (concatenation, literals)
+- ✅ String operations (concatenation, literals, .upper(), .lower())
 - ✅ Control flow (if/else, while, for/range)
-- ✅ Lists (literals, indexing, len)
+- ✅ Lists (literals, indexing, len, .append(), .pop())
 - ✅ Dicts (literals, key access, len)
 - ✅ Variable reassignment detection (var vs const)
 - ✅ Mixed type operations (primitive + PyObject)
+- ✅ Method calls with automatic type conversion
 - ✅ Binary compilation to native code
 - ✅ 41x+ performance improvement
 
 **Roadmap:**
-- [ ] String methods (.upper(), .lower(), .split())
-- [ ] List methods (.append(), .pop())
-- [ ] Dict methods (.keys(), .values())
+- [ ] More string methods (.split(), .join(), .strip())
+- [ ] More list methods (.extend(), .remove(), .insert())
+- [ ] Dict methods (.keys(), .values(), .items())
 - [ ] Classes and methods
 - [ ] Standard library (zyth.web, zyth.http, zyth.ai)
 - [ ] WebAssembly target
