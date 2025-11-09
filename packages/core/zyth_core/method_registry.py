@@ -163,6 +163,52 @@ METHOD_REGISTRY: dict[str, MethodInfo] = {
         return_type=ReturnType.PYOBJECT_DIRECT,  # Returns *PyObject, no error union
         arg_types=[],
     ),
+    "extend": MethodInfo(
+        name="extend",
+        runtime_type="PyList",
+        runtime_fn="extend",
+        needs_allocator=False,
+        return_type=ReturnType.VOID,
+        arg_types=[ArgType.PYOBJECT],  # Another list
+        is_statement=True,
+    ),
+    "remove": MethodInfo(
+        name="remove",
+        runtime_type="PyList",
+        runtime_fn="remove",
+        needs_allocator=True,
+        return_type=ReturnType.VOID,
+        arg_types=[ArgType.ANY],
+        wrap_primitive_args=True,
+        is_statement=True,
+    ),
+    "reverse": MethodInfo(
+        name="reverse",
+        runtime_type="PyList",
+        runtime_fn="reverse",
+        needs_allocator=False,
+        return_type=ReturnType.VOID,
+        arg_types=[],
+        is_statement=True,
+    ),
+    "count": MethodInfo(
+        name="count",
+        runtime_type="PyList",
+        runtime_fn="count",
+        needs_allocator=False,
+        return_type=ReturnType.PRIMITIVE_INT,
+        arg_types=[ArgType.ANY],
+        wrap_primitive_args=True,
+    ),
+    "index": MethodInfo(
+        name="index",
+        runtime_type="PyList",
+        runtime_fn="index",
+        needs_allocator=False,
+        return_type=ReturnType.PRIMITIVE_INT,
+        arg_types=[ArgType.ANY],
+        wrap_primitive_args=True,
+    ),
 }
 
 

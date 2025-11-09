@@ -128,10 +128,10 @@ pub const PyList = struct {
         return item;
     }
 
-    pub fn getItem(obj: *PyObject, index: usize) *PyObject {
+    pub fn getItem(obj: *PyObject, idx: usize) *PyObject {
         std.debug.assert(obj.type_id == .list);
         const data: *PyList = @ptrCast(@alignCast(obj.data));
-        return data.items.items[index];
+        return data.items.items[idx];
     }
 
     pub fn len(obj: *PyObject) usize {
@@ -192,6 +192,81 @@ pub const PyList = struct {
         }
 
         return new_list;
+    }
+
+    pub fn extend(obj: *PyObject, other: *PyObject) !void {
+        std.debug.assert(obj.type_id == .list);
+        std.debug.assert(other.type_id == .list);
+        const data: *PyList = @ptrCast(@alignCast(obj.data));
+        const other_data: *PyList = @ptrCast(@alignCast(other.data));
+
+        // Append all items from other list
+        for (other_data.items.items) |item| {
+            try data.items.append(data.allocator, item);
+            incref(item);
+        }
+    }
+
+    pub fn remove(obj: *PyObject, allocator: std.mem.Allocator, value: *PyObject) !void {
+        std.debug.assert(obj.type_id == .list);
+        const data: *PyList = @ptrCast(@alignCast(obj.data));
+        _ = allocator;
+
+        // Find and remove first occurrence
+        for (data.items.items, 0..) |item, i| {
+            if (item.type_id == .int and value.type_id == .int) {
+                const item_data: *PyInt = @ptrCast(@alignCast(item.data));
+                const value_data: *PyInt = @ptrCast(@alignCast(value.data));
+                if (item_data.value == value_data.value) {
+                    // Found it - remove and decref
+                    const removed = data.items.orderedRemove(i);
+                    decref(removed, data.allocator);
+                    return;
+                }
+            }
+        }
+        // If not found, Python raises ValueError, but we'll silently ignore for now
+    }
+
+    pub fn reverse(obj: *PyObject) void {
+        std.debug.assert(obj.type_id == .list);
+        const data: *PyList = @ptrCast(@alignCast(obj.data));
+        std.mem.reverse(*PyObject, data.items.items);
+    }
+
+    pub fn count(obj: *PyObject, value: *PyObject) i64 {
+        std.debug.assert(obj.type_id == .list);
+        const data: *PyList = @ptrCast(@alignCast(obj.data));
+
+        var count_val: i64 = 0;
+        for (data.items.items) |item| {
+            if (item.type_id == .int and value.type_id == .int) {
+                const item_data: *PyInt = @ptrCast(@alignCast(item.data));
+                const value_data: *PyInt = @ptrCast(@alignCast(value.data));
+                if (item_data.value == value_data.value) {
+                    count_val += 1;
+                }
+            }
+        }
+        return count_val;
+    }
+
+    pub fn index(obj: *PyObject, value: *PyObject) i64 {
+        std.debug.assert(obj.type_id == .list);
+        const data: *PyList = @ptrCast(@alignCast(obj.data));
+
+        // Find first occurrence
+        for (data.items.items, 0..) |item, i| {
+            if (item.type_id == .int and value.type_id == .int) {
+                const item_data: *PyInt = @ptrCast(@alignCast(item.data));
+                const value_data: *PyInt = @ptrCast(@alignCast(value.data));
+                if (item_data.value == value_data.value) {
+                    return @intCast(i);
+                }
+            }
+        }
+        // If not found, Python raises ValueError, but we'll return -1 for now
+        return -1;
     }
 };
 
