@@ -4,8 +4,9 @@ Zyth Code Generator - Converts Python AST to Zig code
 import ast
 from typing import List, Dict, Optional
 from dataclasses import dataclass
-from zyth_core.parser import ParsedModule
-from zyth_core.method_registry import get_method_info, ReturnType
+from core.parser import ParsedModule
+from core.method_registry import get_method_info, ReturnType
+from core.codegen.helpers import CodegenHelpers
 
 
 @dataclass
@@ -19,7 +20,7 @@ class ClassInfo:
     init_params: List[tuple[str, str]]  # (param_name, param_type)
 
 
-class ZigCodeGenerator:
+class ZigCodeGenerator(CodegenHelpers):
     """Generates Zig code from Python AST"""
 
     def __init__(self, imported_modules: Optional[Dict[str, ParsedModule]] = None) -> None:
@@ -1631,7 +1632,7 @@ class ZigCodeGenerator:
             # Track type for method calls that return primitives
             if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute):
                 method_name = node.value.func.attr
-                from zyth_core.method_registry import get_method_info, ReturnType
+                from core.method_registry import get_method_info, ReturnType
 
                 # Get object type for disambiguation
                 obj_type = None
@@ -2448,28 +2449,6 @@ class ZigCodeGenerator:
                 f"Expression not implemented: {node.__class__.__name__}"
             )
 
-    def visit_compare_op(self, op: ast.AST) -> str:
-        """Convert comparison operator"""
-        op_map = {
-            ast.Lt: "<",
-            ast.LtE: "<=",
-            ast.Gt: ">",
-            ast.GtE: ">=",
-            ast.Eq: "==",
-            ast.NotEq: "!=",
-        }
-        return op_map.get(type(op), "==")
-
-    def visit_bin_op(self, op: ast.AST) -> str:
-        """Convert binary operator"""
-        op_map = {
-            ast.Add: "+",
-            ast.Sub: "-",
-            ast.Mult: "*",
-            ast.Div: "/",
-            ast.Mod: "%",
-        }
-        return op_map.get(type(op), "+")
 
 
 def generate_code(parsed: ParsedModule, imported_modules: Optional[Dict[str, 'ParsedModule']] = None) -> str:
@@ -2480,10 +2459,10 @@ def generate_code(parsed: ParsedModule, imported_modules: Optional[Dict[str, 'Pa
 
 if __name__ == "__main__":
     import sys
-    from zyth_core.parser import parse_file, load_all_modules
+    from core.parser import parse_file, load_all_modules
 
     if len(sys.argv) < 2:
-        print("Usage: python -m zyth_core.codegen <file.py>")
+        print("Usage: python -m core.codegen <file.py>")
         sys.exit(1)
 
     filepath = sys.argv[1]

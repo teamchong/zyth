@@ -8,9 +8,9 @@ Main components:
 - Compiler: Orchestration and Zig compilation
 """
 
-from zyth_core.parser import ParsedModule, parse_file, dump_ast
-from zyth_core.codegen import ZigCodeGenerator, generate_code
-from zyth_core.compiler import compile_zig, CompilationError
+from core.parser import ParsedModule, parse_file, dump_ast
+from core.codegen import ZigCodeGenerator, generate_code
+from core.compiler import compile_zig, CompilationError
 
 __version__ = "0.1.0"
 

@@ -187,8 +187,8 @@ def compile_file(source_file: str, output_path: Optional[str] = None, use_cache:
     Raises:
         CompilationError: If compilation fails
     """
-    from zyth_core.parser import parse_file, load_all_modules
-    from zyth_core.codegen import generate_code
+    from core.parser import parse_file, load_all_modules
+    from core.codegen import generate_code
 
     # Generate cache key from absolute source path
     # This ensures same source file always maps to same cache entry
