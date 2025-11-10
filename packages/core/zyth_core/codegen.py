@@ -1719,16 +1719,23 @@ class ZigCodeGenerator:
                             is_borrowed_ref = True
                         # Slice operations (list[1:3]) create new objects - need decref
 
+                    # Check if it's a function call returning primitive - no defer needed
+                    skip_defer = False
+                    if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name):
+                        func_name = node.value.func.id
+                        if func_name in self.function_signatures:
+                            sig = self.function_signatures[func_name]
+                            if not sig["returns_pyobject"]:
+                                # Primitive return - no defer needed
+                                skip_defer = True
+
                     if var_type and var_type in self.class_definitions:
                         # Class instance - use deinit
                         self.emit(f"defer {target.id}.deinit(allocator);")
-                    elif var_type == "int":
-                        # Primitive type - no defer needed
-                        pass
-                    elif not is_borrowed_ref:
+                    elif not skip_defer and not is_borrowed_ref:
                         # PyObject that we own - use decref
                         # This includes: literals, function calls, method calls, slicing, etc.
-                        # But excludes: index subscripts (borrowed references)
+                        # But excludes: index subscripts (borrowed references) and primitive function returns
                         self.emit(f"defer runtime.decref({target.id}, allocator);")
                 else:
                     # For var, need explicit type; for const, type is inferred
