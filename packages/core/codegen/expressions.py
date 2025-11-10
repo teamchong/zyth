@@ -416,9 +416,9 @@ class ExpressionVisitor:
 
             if method_info:
                 args = []
-                args.append(obj_code)
                 if method_info.needs_allocator:
                     args.append("allocator")
+                args.append(obj_code)
 
                 # Track method arguments separately for VOID methods (statement methods)
                 method_args = []
