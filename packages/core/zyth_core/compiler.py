@@ -135,9 +135,9 @@ def compile_zig(zig_code: str, output_path: Optional[str] = None) -> str:
             output_path = str(Path(tmpdir) / "output")
 
         # Compile with Zig
-        # Use ZYTH_DEBUG=1 for faster compilation (but may expose memory leaks)
-        # Default: ReleaseFast (slower compile, no leak detection, optimized binary)
-        optimize = "Debug" if os.getenv("ZYTH_DEBUG") == "1" else "ReleaseFast"
+        # Use Debug to catch memory leaks and bugs during development
+        # Use ZYTH_RELEASE=1 for production builds
+        optimize = "ReleaseFast" if os.getenv("ZYTH_RELEASE") == "1" else "Debug"
 
         try:
             subprocess.run(

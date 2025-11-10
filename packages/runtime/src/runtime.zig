@@ -766,7 +766,10 @@ pub const PyString = struct {
         }
 
         // Create new string from result
-        return try create(allocator, result);
+        const new_str = try create(allocator, result);
+        // Free the temporary buffer (create() duplicates it)
+        allocator.free(result);
+        return new_str;
     }
 
     pub fn split(allocator: std.mem.Allocator, obj: *PyObject, separator: *PyObject) !*PyObject {
@@ -1171,6 +1174,7 @@ pub const PyDict = struct {
         while (iterator.next()) |key| {
             const key_obj = try PyString.create(allocator, key.*);
             try PyList.append(result, key_obj);
+            decref(key_obj, allocator); // Append increfs, so decref our reference
         }
 
         return result;
@@ -1204,7 +1208,9 @@ pub const PyDict = struct {
         std.debug.assert(obj.type_id == .dict);
         std.debug.assert(key.type_id == .string);
         const key_data: *PyString = @ptrCast(@alignCast(key.data));
-        return getWithDefault(obj, allocator, key_data.data, default);
+        const result = getWithDefault(obj, allocator, key_data.data, default);
+        decref(key, allocator); // Done with key PyObject, decref it
+        return result;
     }
 
     pub fn pop(obj: *PyObject, allocator: std.mem.Allocator, key: []const u8) ?*PyObject {
@@ -1254,8 +1260,10 @@ pub const PyDict = struct {
             const pair = try PyTuple.create(allocator, 2);
             const key_obj = try PyString.create(allocator, entry.key_ptr.*);
             PyTuple.setItem(pair, 0, key_obj);
+            decref(key_obj, allocator); // setItem increfs, so decref our reference
             PyTuple.setItem(pair, 1, entry.value_ptr.*);
             try PyList.append(result, pair);
+            decref(pair, allocator); // append increfs, so decref our reference
         }
 
         return result;

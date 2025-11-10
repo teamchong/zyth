@@ -22,7 +22,7 @@ class ClassInfo:
 class ZigCodeGenerator:
     """Generates Zig code from Python AST"""
 
-    def __init__(self) -> None:
+    def __init__(self, imported_modules: Optional[Dict[str, ParsedModule]] = None) -> None:
         self.indent_level = 0
         self.output: List[str] = []
         self.needs_runtime = False  # Track if we need PyObject runtime
@@ -35,6 +35,8 @@ class ZigCodeGenerator:
         self.function_signatures: dict[str, dict] = {}  # Track function signatures for proper calling
         self.class_definitions: Dict[str, ClassInfo] = {}  # Track class definitions
         self.current_class: Optional[str] = None  # Track which class we're currently in
+        self.imported_modules: Dict[str, ParsedModule] = imported_modules or {}  # Track imported modules
+        self.module_functions: Dict[str, Dict[str, dict]] = {}  # Track module.function signatures
 
     def indent(self) -> str:
         """Get current indentation"""
@@ -93,6 +95,15 @@ class ZigCodeGenerator:
         elif isinstance(node, ast.While):
             for stmt in node.body:
                 self._detect_runtime_needs(stmt)
+        elif isinstance(node, ast.For):
+            # Check the iterator and body for runtime needs
+            self._detect_runtime_needs(node.iter)
+            for stmt in node.body:
+                self._detect_runtime_needs(stmt)
+        elif isinstance(node, ast.Call):
+            # Check function arguments for runtime needs
+            for arg in node.args:
+                self._detect_runtime_needs(arg)
 
     def _collect_declarations(self, node: ast.AST) -> None:
         """Collect all variable declarations"""
@@ -225,6 +236,24 @@ class ZigCodeGenerator:
                 "returns_pyobject": returns_pyobject,
             }
 
+        # Pre-analyze imported modules to extract function signatures
+        for module_name, module in self.imported_modules.items():
+            module_funcs = {}
+            for node in module.ast_tree.body:
+                if isinstance(node, ast.FunctionDef):
+                    needs_allocator = self._function_needs_allocator(node)
+                    returns_pyobject = False
+                    if node.returns and isinstance(node.returns, ast.Name):
+                        if node.returns.id in ["str", "list", "dict"]:
+                            returns_pyobject = True
+                    module_funcs[node.name] = {
+                        "needs_allocator": needs_allocator,
+                        "param_count": len(node.args.args),
+                        "returns_pyobject": returns_pyobject,
+                        "node": node,
+                    }
+            self.module_functions[module_name] = module_funcs
+
         # Check if top-level code needs allocator
         # Need allocator if: (1) creates runtime objects OR (2) calls functions/classes that need allocator
         top_level_needs_allocator = False
@@ -249,10 +278,33 @@ class ZigCodeGenerator:
                     if func_name in self.class_definitions:
                         top_level_needs_allocator = True
                         break
-            # Check if calling a method on an instance
+                # Check if calling a module function
+                elif isinstance(node.value.func, ast.Attribute):
+                    if isinstance(node.value.func.value, ast.Name):
+                        module_name = node.value.func.value.id
+                        if module_name in self.module_functions:
+                            func_name = node.value.func.attr
+                            if func_name in self.module_functions[module_name]:
+                                # Module function - check if it needs allocator
+                                if self.module_functions[module_name][func_name]["needs_allocator"]:
+                                    top_level_needs_allocator = True
+                                    break
+            # Check if calling a method on an instance or module function
             elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
                 if isinstance(node.value.func, ast.Attribute):
-                    # Method call - might need allocator
+                    # Check if this is a module function call
+                    if isinstance(node.value.func.value, ast.Name):
+                        module_name = node.value.func.value.id
+                        if module_name in self.module_functions:
+                            func_name = node.value.func.attr
+                            if func_name in self.module_functions[module_name]:
+                                # Module function - check if it needs allocator
+                                if self.module_functions[module_name][func_name]["needs_allocator"]:
+                                    top_level_needs_allocator = True
+                                    break
+                                else:
+                                    continue  # Module function doesn't need allocator
+                    # Method call on instance - might need allocator
                     top_level_needs_allocator = True
                     break
 
@@ -263,6 +315,31 @@ class ZigCodeGenerator:
         # Generate functions
         for func in functions:
             self.visit(func)
+
+        # Generate module namespace structs
+        for module_name, module_funcs in self.module_functions.items():
+            self.emit(f"const {module_name} = struct {{")
+            self.indent_level += 1
+
+            # Temporarily add module functions to function_signatures so visit_FunctionDef works
+            for func_name, func_sig in module_funcs.items():
+                self.function_signatures[func_name] = {
+                    "needs_allocator": func_sig["needs_allocator"],
+                    "param_count": func_sig["param_count"],
+                    "returns_pyobject": func_sig["returns_pyobject"],
+                }
+
+            for func_name, func_sig in module_funcs.items():
+                func_node = func_sig["node"]
+                self.visit_FunctionDef(func_node)
+
+            # Remove module functions from function_signatures
+            for func_name in module_funcs.keys():
+                del self.function_signatures[func_name]
+
+            self.indent_level -= 1
+            self.emit("};")
+            self.emit("")
 
         # Wrap top-level code in main function
         if top_level:
@@ -296,6 +373,14 @@ class ZigCodeGenerator:
         raise NotImplementedError(
             f"Code generation not implemented for {node.__class__.__name__}"
         )
+
+    def visit_Import(self, node: ast.Import) -> None:
+        """Handle import statements - no-op since modules are pre-analyzed"""
+        pass
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        """Handle from...import statements - not yet supported"""
+        raise NotImplementedError("from...import not yet supported, use 'import module' instead")
 
     def _function_needs_allocator(self, node: ast.FunctionDef) -> bool:
         """Check if function needs allocator parameter
@@ -356,7 +441,27 @@ class ZigCodeGenerator:
                     return True
         elif isinstance(node, ast.Call):
             if isinstance(node.func, ast.Attribute):
+                # Check if this is a module function call (doesn't need runtime)
+                if isinstance(node.func.value, ast.Name):
+                    module_name = node.func.value.id
+                    if module_name in self.module_functions:
+                        return False  # Module function calls don't need runtime
                 # Method calls on runtime types
+                return True
+            # Check if print() or other built-in functions have runtime args
+            for arg in node.args:
+                if self._expr_needs_runtime(arg):
+                    return True
+        return False
+
+    def _function_uses_error_operations(self, node: ast.FunctionDef) -> bool:
+        """Check if function uses operations that can throw errors (subscripts, method calls, etc.)"""
+        for stmt in ast.walk(node):
+            # Subscript operations (list[i], dict[key]) return error unions
+            if isinstance(stmt, ast.Subscript):
+                return True
+            # Method calls on PyObjects may return error unions
+            if isinstance(stmt, ast.Call) and isinstance(stmt.func, ast.Attribute):
                 return True
         return False
 
@@ -367,7 +472,8 @@ class ZigCodeGenerator:
         needs_allocator = sig["needs_allocator"]
 
         # Determine if function needs error union
-        needs_error_union = needs_allocator  # For now, assume allocator implies error union
+        # Functions need error union if they use allocator OR error-returning operations
+        needs_error_union = needs_allocator or self._function_uses_error_operations(node)
 
         # Get return type
         return_type = self.visit_type(node.returns, for_runtime=needs_allocator) if node.returns else "void"
@@ -799,16 +905,76 @@ class ZigCodeGenerator:
                 else:
                     raise NotImplementedError("Complex loop targets not supported")
 
+                # Track loop variable type
+                self.var_types[loop_var] = "int"
+
                 # Generate while loop equivalent
-                self.emit(f"var {loop_var}: i64 = {start};")
+                # Check if loop variable already declared (reused in multiple loops)
+                if loop_var in self.declared_vars:
+                    # Already declared, just assign
+                    self.emit(f"{loop_var} = {start};")
+                else:
+                    # First declaration
+                    self.emit(f"var {loop_var}: i64 = {start};")
+                    self.declared_vars.add(loop_var)
                 self.emit(f"while ({loop_var} < {end_code}) {{")
                 self.indent_level += 1
 
                 for stmt in node.body:
                     self.visit(stmt)
 
-                # Increment loop variable
-                self.emit(f"{loop_var} += 1;")
+                # Increment loop variable by step
+                self.emit(f"{loop_var} += {step};")
+
+                self.indent_level -= 1
+                self.emit("}")
+            elif node.iter.func.id == "enumerate":
+                # enumerate(iterable) - iterate with index
+                # Target must be a tuple: (index_var, value_var)
+                if not isinstance(node.target, ast.Tuple) or len(node.target.elts) != 2:
+                    raise NotImplementedError("enumerate() requires tuple unpacking: for i, val in enumerate(...)")
+
+                if not isinstance(node.target.elts[0], ast.Name) or not isinstance(node.target.elts[1], ast.Name):
+                    raise NotImplementedError("enumerate() target variables must be simple names")
+
+                index_var = node.target.elts[0].id
+                value_var = node.target.elts[1].id
+
+                # Get the iterable
+                iterable_code, _ = self.visit_expr(node.iter.args[0])
+
+                # Track variable types
+                self.var_types[index_var] = "int"
+                # Determine value type from iterable
+                if isinstance(node.iter.args[0], ast.Name):
+                    iterable_name = node.iter.args[0].id
+                    list_elem_type = self.list_element_types.get(iterable_name, "string")
+                    if list_elem_type == "int":
+                        self.var_types[value_var] = "pyint"
+                    else:
+                        self.var_types[value_var] = "string"
+
+                # Generate while loop with index
+                if index_var in self.declared_vars:
+                    self.emit(f"{index_var} = 0;")
+                else:
+                    self.emit(f"var {index_var}: i64 = 0;")
+                    self.declared_vars.add(index_var)
+
+                self.emit(f"while ({index_var} < runtime.PyList.len({iterable_code})) {{")
+                self.indent_level += 1
+
+                # Get list item (cast i64 to usize)
+                # Note: getItem() returns borrowed reference, don't decref
+                self.emit(f"const {value_var} = try runtime.PyList.getItem({iterable_code}, @intCast({index_var}));")
+                self.declared_vars.add(value_var)
+
+                # Execute loop body
+                for stmt in node.body:
+                    self.visit(stmt)
+
+                # Increment index
+                self.emit(f"{index_var} += 1;")
 
                 self.indent_level -= 1
                 self.emit("}")
@@ -907,7 +1073,7 @@ class ZigCodeGenerator:
                 self.emit(f"break :{label};")
 
         self.indent_level -= 1
-        self.output.append(self.indent() + "}")
+        self.output.append(self.indent() + "};")
 
     def _wrap_with_try(self, code: str) -> str:
         """Wrap error-returning code with appropriate error handling"""
@@ -1035,6 +1201,15 @@ class ZigCodeGenerator:
             if isinstance(node.value, ast.List):
                 # Track this as a list type
                 self.var_types[target.id] = "list"
+
+                # Detect element type from first element
+                if node.value.elts:
+                    first_elem = node.value.elts[0]
+                    if isinstance(first_elem, ast.Constant):
+                        if isinstance(first_elem.value, str):
+                            self.list_element_types[target.id] = "string"
+                        elif isinstance(first_elem.value, int):
+                            self.list_element_types[target.id] = "int"
 
                 # Create empty list
                 if is_first_assignment:
@@ -1313,6 +1488,19 @@ class ZigCodeGenerator:
                     else:
                         self.var_types[target.id] = "int"  # Default to int for primitives
 
+            # Track type for module function calls (e.g., mymath.add)
+            if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute):
+                if isinstance(node.value.func.value, ast.Name):
+                    module_name = node.value.func.value.id
+                    func_name = node.value.func.attr
+                    if module_name in self.module_functions:
+                        if func_name in self.module_functions[module_name]:
+                            sig = self.module_functions[module_name][func_name]
+                            if sig["returns_pyobject"]:
+                                self.var_types[target.id] = "string"  # Default to string for PyObjects
+                            else:
+                                self.var_types[target.id] = "int"  # Default to int for primitives
+
             # Track type when assigning from another variable
             if isinstance(node.value, ast.Name):
                 source_type = self.var_types.get(node.value.id)
@@ -1379,12 +1567,24 @@ class ZigCodeGenerator:
                         self.emit(f"{var_keyword} {target.id} = {wrapped_code};")
 
                     # Check if it's a class instance (needs deinit) or PyObject (needs decref)
+                    # IMPORTANT: Index subscripts (list[i], dict[key]) return borrowed references
+                    # but slice subscripts (list[1:3]) return owned references that MUST be decreffed
+                    is_borrowed_ref = False
+                    if isinstance(node.value, ast.Subscript):
+                        # Check if it's an index (borrowed) or slice (owned)
+                        if not isinstance(node.value.slice, ast.Slice):
+                            # Index operation (list[i], dict["key"]) - borrowed reference
+                            is_borrowed_ref = True
+                        # Slice operations (list[1:3]) create new objects - need decref
+
                     var_type = self.var_types.get(target.id)
                     if var_type and var_type in self.class_definitions:
                         # Class instance - use deinit
                         self.emit(f"defer {target.id}.deinit(allocator);")
-                    else:
-                        # PyObject - use decref
+                    elif not is_borrowed_ref:
+                        # PyObject that we own - use decref
+                        # This includes: literals, function calls, method calls, slicing, etc.
+                        # But excludes: index subscripts (borrowed references)
                         self.emit(f"defer runtime.decref({target.id}, allocator);")
                 else:
                     # For var, need explicit type; for const, type is inferred
@@ -1636,6 +1836,11 @@ class ZigCodeGenerator:
                 var_name = node.value.id
                 var_type = self.var_types.get(var_name)
 
+                # Check if this is a module function call (e.g., mymath.add)
+                if var_name in self.module_functions:
+                    # Module function access - return direct module.function reference
+                    return (f"{var_name}.{node.attr}", False)
+
                 # If var_type is a class name, check if it's a field or method
                 if var_type in self.class_definitions:
                     class_info = self.class_definitions[var_type]
@@ -1773,18 +1978,19 @@ class ZigCodeGenerator:
 
                             # Check if it's a slice operation
                             if isinstance(subscript_node.slice, ast.Slice):
-                                # Slicing returns a list or string
+                                # Slicing creates a new object - need temp var + decref
+                                temp_var = f"_print_slice_{id(node)}"
                                 if isinstance(subscript_node.value, ast.Name):
                                     container_var = subscript_node.value.id
                                     var_type = self.var_types.get(container_var)
                                     if var_type == "string":
                                         # String slice - print as string
-                                        return (f'std.debug.print("{{s}}\\n", .{{runtime.PyString.getValue({wrapped_arg})}})', False)
+                                        return (f'{{ const {temp_var} = {wrapped_arg}; defer runtime.decref({temp_var}, allocator); std.debug.print("{{s}}\\n", .{{runtime.PyString.getValue({temp_var})}}); }}', False)
                                     else:
                                         # List slice - print as list
-                                        return (f'runtime.printList({wrapped_arg}); std.debug.print("\\n", .{{}})', False)
+                                        return (f'{{ const {temp_var} = {wrapped_arg}; defer runtime.decref({temp_var}, allocator); runtime.printList({temp_var}); std.debug.print("\\n", .{{}}); }}', False)
                                 # Default to list printing
-                                return (f'runtime.printList({wrapped_arg}); std.debug.print("\\n", .{{}})', False)
+                                return (f'{{ const {temp_var} = {wrapped_arg}; defer runtime.decref({temp_var}, allocator); runtime.printList({temp_var}); std.debug.print("\\n", .{{}}); }}', False)
                             elif isinstance(subscript_node.slice, ast.Constant) and isinstance(subscript_node.slice.value, str):
                                 # Dict access - value could be string or int
                                 # We need to check the dict variable to determine value type
@@ -1875,6 +2081,31 @@ class ZigCodeGenerator:
                 args_str = ", ".join(call_args)
                 return (f"{class_name}.init({args_str})", True)
 
+            # Check if this is a module function call (e.g., mymath.add)
+            if "." in func_code:
+                parts = func_code.split(".")
+                if len(parts) == 2:
+                    module_name, func_name = parts
+                    if module_name in self.module_functions:
+                        if func_name in self.module_functions[module_name]:
+                            sig = self.module_functions[module_name][func_name]
+                            call_args = []
+
+                            # Add allocator if function needs it
+                            if sig["needs_allocator"]:
+                                call_args.append("allocator")
+
+                            # Add user arguments, wrapping with try if needed
+                            for arg_code, arg_try in args:
+                                if arg_try:
+                                    call_args.append(f"try {arg_code}")
+                                else:
+                                    call_args.append(arg_code)
+
+                            args_str = ", ".join(call_args)
+                            needs_try = sig["needs_allocator"]  # Module functions with allocator return error unions
+                            return (f"{func_code}({args_str})", needs_try)
+
             # Check if this is a user-defined function
             if func_code in self.function_signatures:
                 sig = self.function_signatures[func_code]
@@ -1945,15 +2176,13 @@ class ZigCodeGenerator:
 
 def generate_code(parsed: ParsedModule, imported_modules: Optional[Dict[str, 'ParsedModule']] = None) -> str:
     """Generate Zig code from parsed module"""
-    generator = ZigCodeGenerator()
-    # Note: imported_modules parameter kept for backwards compatibility with compiler.py
-    # but not used in current implementation
+    generator = ZigCodeGenerator(imported_modules=imported_modules)
     return generator.generate(parsed)
 
 
 if __name__ == "__main__":
     import sys
-    from zyth_core.parser import parse_file
+    from zyth_core.parser import parse_file, load_all_modules
 
     if len(sys.argv) < 2:
         print("Usage: python -m zyth_core.codegen <file.py>")
@@ -1961,7 +2190,13 @@ if __name__ == "__main__":
 
     filepath = sys.argv[1]
     parsed = parse_file(filepath)
-    zig_code = generate_code(parsed)
+
+    # Load imported modules
+    imported_modules = {}
+    if parsed.imports:
+        imported_modules = load_all_modules(parsed)
+
+    zig_code = generate_code(parsed, imported_modules)
 
     print(f"✓ Generated Zig code from {filepath}\n")
     print("=" * 60)
