@@ -10,7 +10,8 @@ print("Split length:")
 print(len(parts))
 
 upper_text = text.upper()
-print("Upper works: YES")
+print("Upper length:")
+print(len(upper_text))
 
 # startswith, endswith
 if text.startswith("hello"):
@@ -30,7 +31,8 @@ print(count)
 
 # replace, strip
 replaced = text.replace("hello", "hi")
-print("Replace works: YES")
+print("Replace length:")
+print(len(replaced))
 
 padded = "  trim  "
 trimmed = padded.strip()

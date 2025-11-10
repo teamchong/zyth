@@ -77,6 +77,12 @@ class TestListMethods:
         ('nums = [1, 2, 3]\nnums.insert(0, 0)\nprint(len(nums))', "insert() length"),
         ('nums = [1, 2, 3]\nnums.insert(1, 9)\nprint(nums[1])', "insert() middle"),
         ('nums = [1, 2, 3]\nnums.clear()\nprint(len(nums))', "clear() basic"),
+        # New methods
+        ('nums = [3, 1, 2]\nnums.sort()\nprint(nums[0])', "sort() ascending"),
+        ('nums = [3, 1, 2]\nnums.sort()\nprint(nums[2])', "sort() last element"),
+        ('nums = [1, 2, 3]\ncopy = nums.copy()\nprint(len(copy))', "copy() length"),
+        ('nums = [1, 2, 3]\ncopy = nums.copy()\nprint(copy[1])', "copy() access"),
+        # min/max/sum/len as methods are not Python-compatible (use built-in functions instead)
     ])
     def test_list_method(self, code, desc):
         """Test list methods match Python behavior"""

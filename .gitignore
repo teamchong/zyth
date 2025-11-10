@@ -66,3 +66,5 @@ uv.lock
 # Zyth specific
 _prototype/
 *.zig.o
+*.bak*
+*.before_fix

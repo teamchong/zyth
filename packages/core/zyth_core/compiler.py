@@ -6,11 +6,71 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 import shutil
+import hashlib
+import os
 
 
 class CompilationError(Exception):
     """Raised when Zig compilation fails"""
     pass
+
+
+# Cache directory setup
+CACHE_DIR = Path(tempfile.gettempdir()) / "zyth_cache"
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def get_compiler_files() -> list[Path]:
+    """
+    Get list of all compiler files that affect compilation.
+
+    Used for timestamp-based cache invalidation.
+
+    Returns:
+        List of Path objects for all compiler source files
+    """
+    base = Path(__file__).parent
+    return [
+        Path(__file__),  # compiler.py
+        base / "codegen.py",
+        base / "method_registry.py",
+        base / "parser.py",
+        base.parent.parent / "runtime" / "src" / "runtime.zig",
+    ]
+
+
+def is_cache_valid(cache_file: Path, source_file: Path) -> bool:
+    """
+    Check if cached binary is up-to-date using timestamp comparison.
+
+    Cache is valid if the cached binary is newer than both:
+    - The source file
+    - All compiler files
+
+    This is the standard approach used by Make, Ninja, and most build systems.
+
+    Args:
+        cache_file: Path to cached binary
+        source_file: Path to source Python file
+
+    Returns:
+        True if cache is valid and can be reused
+    """
+    if not cache_file.exists():
+        return False
+
+    cache_mtime = cache_file.stat().st_mtime
+
+    # Check if source file is newer than cache
+    if source_file.stat().st_mtime > cache_mtime:
+        return False
+
+    # Check if any compiler file is newer than cache
+    for compiler_file in get_compiler_files():
+        if compiler_file.exists() and compiler_file.stat().st_mtime > cache_mtime:
+            return False
+
+    return True
 
 
 def compile_zig(zig_code: str, output_path: Optional[str] = None) -> str:
@@ -106,10 +166,66 @@ def compile_zig(zig_code: str, output_path: Optional[str] = None) -> str:
             raise CompilationError(f"Zig compilation failed:\n{error_msg}") from e
 
 
+def compile_file(source_file: str, output_path: Optional[str] = None, use_cache: bool = True) -> str:
+    """
+    Compile Python source file to binary with caching
+
+    Args:
+        source_file: Path to Python source file
+        output_path: Optional output path for binary
+        use_cache: Enable build caching (default: True)
+
+    Returns:
+        Path to compiled binary
+
+    Raises:
+        CompilationError: If compilation fails
+    """
+    from zyth_core.parser import parse_file, load_all_modules
+    from zyth_core.codegen import generate_code
+
+    # Generate cache key from absolute source path
+    # This ensures same source file always maps to same cache entry
+    source_path = Path(source_file).absolute()
+    cache_key = hashlib.md5(source_path.as_posix().encode()).hexdigest()
+    cache_file = CACHE_DIR / cache_key
+
+    # Check cache using timestamp comparison (fast!)
+    if use_cache and is_cache_valid(cache_file, source_path):
+        # Cache hit - reuse binary
+        if output_path:
+            output_dest = Path(output_path)
+            output_dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(cache_file), str(output_dest))
+            return str(output_dest)
+        else:
+            # Return path to cached binary
+            return str(cache_file)
+
+    # Cache miss or caching disabled - compile fresh
+    # Parse Python file
+    parsed = parse_file(source_file)
+
+    # Load imported modules
+    imported_modules = {}
+    if parsed.imports:
+        imported_modules = load_all_modules(parsed)
+
+    # Generate Zig code
+    zig_code = generate_code(parsed, imported_modules)
+
+    # Compile to binary
+    binary_path = compile_zig(zig_code, output_path)
+
+    # Cache the result if enabled
+    if use_cache:
+        shutil.copy2(binary_path, str(cache_file))
+
+    return binary_path
+
+
 if __name__ == "__main__":
     import sys
-    from zyth_core.parser import parse_file
-    from zyth_core.codegen import generate_code
 
     if len(sys.argv) < 2:
         print("Usage: python -m zyth_core.compiler <file.py> [output]")
@@ -118,16 +234,10 @@ if __name__ == "__main__":
     filepath = sys.argv[1]
     output_path_arg = sys.argv[2] if len(sys.argv) > 2 else None
 
-    # Parse Python file
-    print(f"Parsing {filepath}...")
-    parsed = parse_file(filepath)
+    # Check for cache control via environment variable
+    use_cache = os.getenv("ZYTH_CACHE", "1") == "1"
 
-    # Generate Zig code
-    print("Generating Zig code...")
-    zig_code = generate_code(parsed)
-
-    # Compile to binary
-    print("Compiling...")
-    binary_path = compile_zig(zig_code, output_path_arg)
+    # Compile with caching
+    binary_path = compile_file(filepath, output_path_arg, use_cache=use_cache)
 
     print(f"✓ Compiled successfully to: {binary_path}")

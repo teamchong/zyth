@@ -75,6 +75,16 @@ class TestStringMethods:
         ('text = "hello hello"\nprint(text.count("hello"))', "count() multiple"),
         ('text = "abcabc"\nprint(text.count("bc"))', "count() substring"),
         ('text = "hello"\nprint(text.count("x"))', "count() zero"),
+        # New methods
+        ('words = ["hello", "world"]\nprint(",".join(words))', "join()"),
+        ('text = "12345"\nif text.isdigit():\n    print("YES")', "isdigit() true"),
+        ('text = "123a"\nif text.isdigit():\n    print("YES")\nelse:\n    print("NO")', "isdigit() false"),
+        ('text = "hello"\nif text.isalpha():\n    print("YES")', "isalpha() true"),
+        ('text = "hello123"\nif text.isalpha():\n    print("YES")\nelse:\n    print("NO")', "isalpha() false"),
+        ('text = "hello world"\nprint(text.capitalize())', "capitalize()"),
+        ('text = "HeLLo"\nprint(text.swapcase())', "swapcase()"),
+        ('text = "hello world"\nprint(text.title())', "title()"),
+        ('text = "hi"\nprint(text.center(6))', "center()"),
     ])
     def test_string_method(self, code, desc):
         """Test string methods match Python behavior"""
@@ -91,7 +101,7 @@ print(numbers.count(2))
 '''
         py_out, zy_out = run_code(code)
         assert py_out == zy_out
-        assert "2\n1\n" in py_out  # Verify correct counts
+        assert "2\n2\n" in py_out  # Verify correct counts (2 hellos in string, 2 twos in list)
 
 
 if __name__ == "__main__":

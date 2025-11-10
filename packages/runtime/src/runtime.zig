@@ -2,6 +2,15 @@
 /// Core runtime support for compiled Python code
 const std = @import("std");
 
+/// Python exception types mapped to Zig errors
+pub const PythonError = error{
+    ZeroDivisionError,
+    IndexError,
+    ValueError,
+    TypeError,
+    KeyError,
+};
+
 /// Python object representation
 pub const PyObject = struct {
     ref_count: usize,
@@ -14,6 +23,7 @@ pub const PyObject = struct {
         bool,
         string,
         list,
+        tuple,
         dict,
         none,
     };
@@ -42,6 +52,15 @@ pub fn decref(obj: *PyObject, allocator: std.mem.Allocator) void {
                 data.items.deinit(data.allocator);
                 allocator.destroy(data);
             },
+            .tuple => {
+                const data: *PyTuple = @ptrCast(@alignCast(obj.data));
+                // Decref all items
+                for (data.items) |item| {
+                    decref(item, allocator);
+                }
+                allocator.free(data.items);
+                allocator.destroy(data);
+            },
             .string => {
                 const data: *PyString = @ptrCast(@alignCast(obj.data));
                 allocator.free(data.data);
@@ -61,6 +80,52 @@ pub fn decref(obj: *PyObject, allocator: std.mem.Allocator) void {
         }
         allocator.destroy(obj);
     }
+}
+
+/// Helper function to print PyObject based on runtime type
+pub fn printPyObject(obj: *PyObject) void {
+    switch (obj.type_id) {
+        .int => {
+            const data: *PyInt = @ptrCast(@alignCast(obj.data));
+            std.debug.print("{}", .{data.value});
+        },
+        .string => {
+            const data: *PyString = @ptrCast(@alignCast(obj.data));
+            std.debug.print("{s}", .{data.data});
+        },
+        else => {
+            // For other types, print the pointer (fallback)
+            std.debug.print("{*}", .{obj});
+        },
+    }
+}
+
+/// Helper function to print a list in Python format: [elem1, elem2, elem3]
+pub fn printList(obj: *PyObject) void {
+    std.debug.assert(obj.type_id == .list);
+    const data: *PyList = @ptrCast(@alignCast(obj.data));
+
+    std.debug.print("[", .{});
+    for (data.items.items, 0..) |item, i| {
+        if (i > 0) {
+            std.debug.print(", ", .{});
+        }
+        // Print each element based on its type
+        switch (item.type_id) {
+            .int => {
+                const int_data: *PyInt = @ptrCast(@alignCast(item.data));
+                std.debug.print("{}", .{int_data.value});
+            },
+            .string => {
+                const str_data: *PyString = @ptrCast(@alignCast(item.data));
+                std.debug.print("'{s}'", .{str_data.data});
+            },
+            else => {
+                std.debug.print("{*}", .{item});
+            },
+        }
+    }
+    std.debug.print("]", .{});
 }
 
 /// Python integer type
@@ -86,6 +151,24 @@ pub const PyInt = struct {
         return data.value;
     }
 };
+
+/// Helper functions for operations that can raise exceptions
+
+/// Integer division with zero check
+pub fn divideInt(a: i64, b: i64) PythonError!i64 {
+    if (b == 0) {
+        return PythonError.ZeroDivisionError;
+    }
+    return @divTrunc(a, b);
+}
+
+/// Modulo with zero check
+pub fn moduloInt(a: i64, b: i64) PythonError!i64 {
+    if (b == 0) {
+        return PythonError.ZeroDivisionError;
+    }
+    return @mod(a, b);
+}
 
 /// Python list type
 pub const PyList = struct {
@@ -117,9 +200,12 @@ pub const PyList = struct {
         incref(item);
     }
 
-    pub fn pop(obj: *PyObject, allocator: std.mem.Allocator) *PyObject {
+    pub fn pop(obj: *PyObject, allocator: std.mem.Allocator) PythonError!*PyObject {
         std.debug.assert(obj.type_id == .list);
         const data: *PyList = @ptrCast(@alignCast(obj.data));
+        if (data.items.items.len == 0) {
+            return PythonError.IndexError;
+        }
         // pop() returns the last element and removes it
         const item = data.items.items[data.items.items.len - 1];
         _ = data.items.pop(); // Remove it from the list
@@ -128,9 +214,12 @@ pub const PyList = struct {
         return item;
     }
 
-    pub fn getItem(obj: *PyObject, idx: usize) *PyObject {
+    pub fn getItem(obj: *PyObject, idx: usize) PythonError!*PyObject {
         std.debug.assert(obj.type_id == .list);
         const data: *PyList = @ptrCast(@alignCast(obj.data));
+        if (idx >= data.items.items.len) {
+            return PythonError.IndexError;
+        }
         return data.items.items[idx];
     }
 
@@ -159,15 +248,20 @@ pub const PyList = struct {
         return false;
     }
 
-    pub fn slice(obj: *PyObject, allocator: std.mem.Allocator, start_opt: ?i64, end_opt: ?i64) !*PyObject {
+    pub fn slice(obj: *PyObject, allocator: std.mem.Allocator, start_opt: ?i64, end_opt: ?i64, step_opt: ?i64) !*PyObject {
         std.debug.assert(obj.type_id == .list);
         const data: *PyList = @ptrCast(@alignCast(obj.data));
 
         const list_len: i64 = @intCast(data.items.items.len);
+        const step: i64 = step_opt orelse 1;
+
+        if (step == 0) {
+            return PythonError.ValueError; // Step cannot be zero
+        }
 
         // Handle defaults and bounds
-        var start: i64 = start_opt orelse 0;
-        var end: i64 = end_opt orelse list_len;
+        var start: i64 = start_opt orelse (if (step > 0) 0 else list_len - 1);
+        var end: i64 = end_opt orelse (if (step > 0) list_len else -list_len - 1);
 
         // Handle negative indices
         if (start < 0) start = @max(0, list_len + start);
@@ -175,20 +269,36 @@ pub const PyList = struct {
 
         // Clamp to valid range
         start = @max(0, @min(start, list_len));
-        end = @max(start, @min(end, list_len));
+        end = @max(0, @min(end, list_len));
 
         // Create new list
         const new_list = try create(allocator);
         const new_data: *PyList = @ptrCast(@alignCast(new_list.data));
 
-        // Copy elements
-        const start_idx: usize = @intCast(start);
-        const end_idx: usize = @intCast(end);
-        var i: usize = start_idx;
-        while (i < end_idx) : (i += 1) {
-            const item = data.items.items[i];
-            try new_data.items.append(allocator, item);
-            incref(item);
+        // Copy elements with step
+        if (step > 0) {
+            const start_idx: usize = @intCast(start);
+            const end_idx: usize = @intCast(end);
+            const step_usize: usize = @intCast(step);
+            var i: usize = start_idx;
+            while (i < end_idx) : (i += step_usize) {
+                const item = data.items.items[i];
+                try new_data.items.append(allocator, item);
+                incref(item);
+            }
+        } else {
+            // Negative step - iterate backwards
+            const start_idx: usize = @intCast(start);
+            const end_idx: usize = @intCast(end);
+            const step_neg: usize = @intCast(-step);
+            var i: usize = start_idx;
+            while (i > end_idx) {
+                const item = data.items.items[i];
+                try new_data.items.append(allocator, item);
+                incref(item);
+                if (i < step_neg) break;
+                i -= step_neg;
+            }
         }
 
         return new_list;
@@ -293,15 +403,169 @@ pub const PyList = struct {
     pub fn clear(obj: *PyObject, allocator: std.mem.Allocator) void {
         std.debug.assert(obj.type_id == .list);
         const data: *PyList = @ptrCast(@alignCast(obj.data));
-        const alloc = allocator; // Use passed allocator for consistency
-        _ = alloc;
+        _ = allocator;
 
         // Decref all items
         for (data.items.items) |item| {
             decref(item, data.allocator);
         }
 
-        data.items.clearAndFree();
+        data.items.clearAndFree(data.allocator);
+    }
+
+    pub fn sort(obj: *PyObject) void {
+        std.debug.assert(obj.type_id == .list);
+        const data: *PyList = @ptrCast(@alignCast(obj.data));
+
+        // Simple bubble sort for integer lists
+        const items = data.items.items;
+        if (items.len <= 1) return;
+
+        var i: usize = 0;
+        while (i < items.len) : (i += 1) {
+            var j: usize = 0;
+            while (j < items.len - i - 1) : (j += 1) {
+                if (items[j].type_id == .int and items[j + 1].type_id == .int) {
+                    const val_j = PyInt.getValue(items[j]);
+                    const val_j1 = PyInt.getValue(items[j + 1]);
+                    if (val_j > val_j1) {
+                        // Swap
+                        const temp = items[j];
+                        items[j] = items[j + 1];
+                        items[j + 1] = temp;
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn copy(obj: *PyObject, allocator: std.mem.Allocator) !*PyObject {
+        std.debug.assert(obj.type_id == .list);
+        const data: *PyList = @ptrCast(@alignCast(obj.data));
+
+        const new_list = try create(allocator);
+        const new_data: *PyList = @ptrCast(@alignCast(new_list.data));
+
+        // Copy all items and incref
+        for (data.items.items) |item| {
+            try new_data.items.append(allocator, item);
+            incref(item);
+        }
+
+        return new_list;
+    }
+
+    pub fn len_method(obj: *PyObject) i64 {
+        std.debug.assert(obj.type_id == .list);
+        const data: *PyList = @ptrCast(@alignCast(obj.data));
+        return @intCast(data.items.items.len);
+    }
+
+    pub fn min(obj: *PyObject) i64 {
+        std.debug.assert(obj.type_id == .list);
+        const data: *PyList = @ptrCast(@alignCast(obj.data));
+
+        if (data.items.items.len == 0) return 0;
+
+        var min_val: i64 = std.math.maxInt(i64);
+        for (data.items.items) |item| {
+            if (item.type_id == .int) {
+                const val = PyInt.getValue(item);
+                if (val < min_val) {
+                    min_val = val;
+                }
+            }
+        }
+
+        return min_val;
+    }
+
+    pub fn max(obj: *PyObject) i64 {
+        std.debug.assert(obj.type_id == .list);
+        const data: *PyList = @ptrCast(@alignCast(obj.data));
+
+        if (data.items.items.len == 0) return 0;
+
+        var max_val: i64 = std.math.minInt(i64);
+        for (data.items.items) |item| {
+            if (item.type_id == .int) {
+                const val = PyInt.getValue(item);
+                if (val > max_val) {
+                    max_val = val;
+                }
+            }
+        }
+
+        return max_val;
+    }
+
+    pub fn sum(obj: *PyObject) i64 {
+        std.debug.assert(obj.type_id == .list);
+        const data: *PyList = @ptrCast(@alignCast(obj.data));
+
+        var total: i64 = 0;
+        for (data.items.items) |item| {
+            if (item.type_id == .int) {
+                total += PyInt.getValue(item);
+            }
+        }
+
+        return total;
+    }
+};
+
+/// Python tuple type (immutable sequence)
+pub const PyTuple = struct {
+    items: []*PyObject,
+    allocator: std.mem.Allocator,
+
+    pub fn create(allocator: std.mem.Allocator, size: usize) !*PyObject {
+        const obj = try allocator.create(PyObject);
+        const tuple_data = try allocator.create(PyTuple);
+
+        // Allocate fixed-size array for items
+        const items = try allocator.alloc(*PyObject, size);
+
+        tuple_data.* = PyTuple{
+            .items = items,
+            .allocator = allocator,
+        };
+
+        obj.* = PyObject{
+            .ref_count = 1,
+            .type_id = .tuple,
+            .data = tuple_data,
+        };
+        return obj;
+    }
+
+    pub fn setItem(obj: *PyObject, idx: usize, item: *PyObject) void {
+        std.debug.assert(obj.type_id == .tuple);
+        const data: *PyTuple = @ptrCast(@alignCast(obj.data));
+        std.debug.assert(idx < data.items.len);
+        data.items[idx] = item;
+        incref(item);
+    }
+
+    pub fn getItem(obj: *PyObject, idx: usize) PythonError!*PyObject {
+        std.debug.assert(obj.type_id == .tuple);
+        const data: *PyTuple = @ptrCast(@alignCast(obj.data));
+        if (idx >= data.items.len) {
+            return PythonError.IndexError;
+        }
+        return data.items[idx];
+    }
+
+    pub fn len(obj: *PyObject) usize {
+        std.debug.assert(obj.type_id == .tuple);
+        const data: *PyTuple = @ptrCast(@alignCast(obj.data));
+        return data.items.len;
+    }
+
+    pub fn len_method(obj: *PyObject) i64 {
+        std.debug.assert(obj.type_id == .tuple);
+        const data: *PyTuple = @ptrCast(@alignCast(obj.data));
+        return @intCast(data.items.len);
     }
 };
 
@@ -424,15 +688,20 @@ pub const PyString = struct {
         return false;
     }
 
-    pub fn slice(obj: *PyObject, allocator: std.mem.Allocator, start_opt: ?i64, end_opt: ?i64) !*PyObject {
+    pub fn slice(obj: *PyObject, allocator: std.mem.Allocator, start_opt: ?i64, end_opt: ?i64, step_opt: ?i64) !*PyObject {
         std.debug.assert(obj.type_id == .string);
         const data: *PyString = @ptrCast(@alignCast(obj.data));
 
         const str_len: i64 = @intCast(data.data.len);
+        const step: i64 = step_opt orelse 1;
+
+        if (step == 0) {
+            return PythonError.ValueError; // Step cannot be zero
+        }
 
         // Handle defaults and bounds
-        var start: i64 = start_opt orelse 0;
-        var end: i64 = end_opt orelse str_len;
+        var start: i64 = start_opt orelse (if (step > 0) 0 else str_len - 1);
+        var end: i64 = end_opt orelse (if (step > 0) str_len else -str_len - 1);
 
         // Handle negative indices
         if (start < 0) start = @max(0, str_len + start);
@@ -440,15 +709,64 @@ pub const PyString = struct {
 
         // Clamp to valid range
         start = @max(0, @min(start, str_len));
-        end = @max(start, @min(end, str_len));
+        end = @max(0, @min(end, str_len));
 
-        // Extract substring
-        const start_idx: usize = @intCast(start);
-        const end_idx: usize = @intCast(end);
-        const substring = data.data[start_idx..end_idx];
+        // If step is 1, we can use simple substring extraction (optimization)
+        if (step == 1) {
+            const start_idx: usize = @intCast(start);
+            const end_idx: usize = @intCast(end);
+            const substring = data.data[start_idx..end_idx];
+            return try create(allocator, substring);
+        }
 
-        // Create new string
-        return try create(allocator, substring);
+        // Calculate result size for step != 1
+        var result_len: usize = 0;
+        if (step > 0) {
+            const start_idx: usize = @intCast(start);
+            const end_idx: usize = @intCast(end);
+            const step_usize: usize = @intCast(step);
+            if (end_idx > start_idx) {
+                result_len = (end_idx - start_idx + step_usize - 1) / step_usize;
+            }
+        } else {
+            const start_idx: usize = @intCast(start);
+            const end_idx: usize = @intCast(end);
+            const step_neg: usize = @intCast(-step);
+            if (start_idx > end_idx) {
+                result_len = (start_idx - end_idx + step_neg - 1) / step_neg;
+            }
+        }
+
+        // Allocate result buffer
+        const result = try allocator.alloc(u8, result_len);
+        var result_idx: usize = 0;
+
+        // Fill result with step
+        if (step > 0) {
+            const start_idx: usize = @intCast(start);
+            const end_idx: usize = @intCast(end);
+            const step_usize: usize = @intCast(step);
+            var i: usize = start_idx;
+            while (i < end_idx and result_idx < result_len) : (i += step_usize) {
+                result[result_idx] = data.data[i];
+                result_idx += 1;
+            }
+        } else {
+            // Negative step - iterate backwards
+            const start_idx: usize = @intCast(start);
+            const end_idx: usize = @intCast(end);
+            const step_neg: usize = @intCast(-step);
+            var i: usize = start_idx;
+            while (i > end_idx and result_idx < result_len) {
+                result[result_idx] = data.data[i];
+                result_idx += 1;
+                if (i < step_neg) break;
+                i -= step_neg;
+            }
+        }
+
+        // Create new string from result
+        return try create(allocator, result);
     }
 
     pub fn split(allocator: std.mem.Allocator, obj: *PyObject, separator: *PyObject) !*PyObject {
@@ -642,6 +960,161 @@ pub const PyString = struct {
         }
         return count_val;
     }
+
+    pub fn join(allocator: std.mem.Allocator, separator: *PyObject, list: *PyObject) !*PyObject {
+        std.debug.assert(separator.type_id == .string);
+        std.debug.assert(list.type_id == .list);
+        const sep_data: *PyString = @ptrCast(@alignCast(separator.data));
+        const list_data: *PyList = @ptrCast(@alignCast(list.data));
+
+        const sep = sep_data.data;
+        const items = list_data.items.items;
+
+        if (items.len == 0) {
+            return try create(allocator, "");
+        }
+
+        // Calculate total length
+        var total_len: usize = 0;
+        for (items) |item| {
+            if (item.type_id == .string) {
+                const item_data: *PyString = @ptrCast(@alignCast(item.data));
+                total_len += item_data.data.len;
+            }
+        }
+        total_len += sep.len * (items.len - 1);
+
+        // Build result
+        const result = try allocator.alloc(u8, total_len);
+        var pos: usize = 0;
+
+        for (items, 0..) |item, i| {
+            if (item.type_id == .string) {
+                const item_data: *PyString = @ptrCast(@alignCast(item.data));
+                @memcpy(result[pos..pos + item_data.data.len], item_data.data);
+                pos += item_data.data.len;
+
+                if (i < items.len - 1) {
+                    @memcpy(result[pos..pos + sep.len], sep);
+                    pos += sep.len;
+                }
+            }
+        }
+
+        return try create(allocator, result);
+    }
+
+    pub fn isdigit(obj: *PyObject) bool {
+        std.debug.assert(obj.type_id == .string);
+        const data: *PyString = @ptrCast(@alignCast(obj.data));
+        const str = data.data;
+
+        if (str.len == 0) return false;
+
+        for (str) |c| {
+            if (!std.ascii.isDigit(c)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    pub fn isalpha(obj: *PyObject) bool {
+        std.debug.assert(obj.type_id == .string);
+        const data: *PyString = @ptrCast(@alignCast(obj.data));
+        const str = data.data;
+
+        if (str.len == 0) return false;
+
+        for (str) |c| {
+            if (!std.ascii.isAlphabetic(c)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    pub fn capitalize(allocator: std.mem.Allocator, obj: *PyObject) !*PyObject {
+        std.debug.assert(obj.type_id == .string);
+        const data: *PyString = @ptrCast(@alignCast(obj.data));
+
+        if (data.data.len == 0) {
+            return try create(allocator, "");
+        }
+
+        const result = try allocator.alloc(u8, data.data.len);
+        result[0] = std.ascii.toUpper(data.data[0]);
+
+        for (data.data[1..], 0..) |c, i| {
+            result[i + 1] = std.ascii.toLower(c);
+        }
+
+        return try create(allocator, result);
+    }
+
+    pub fn swapcase(allocator: std.mem.Allocator, obj: *PyObject) !*PyObject {
+        std.debug.assert(obj.type_id == .string);
+        const data: *PyString = @ptrCast(@alignCast(obj.data));
+
+        const result = try allocator.alloc(u8, data.data.len);
+        for (data.data, 0..) |c, i| {
+            if (std.ascii.isUpper(c)) {
+                result[i] = std.ascii.toLower(c);
+            } else if (std.ascii.isLower(c)) {
+                result[i] = std.ascii.toUpper(c);
+            } else {
+                result[i] = c;
+            }
+        }
+
+        return try create(allocator, result);
+    }
+
+    pub fn title(allocator: std.mem.Allocator, obj: *PyObject) !*PyObject {
+        std.debug.assert(obj.type_id == .string);
+        const data: *PyString = @ptrCast(@alignCast(obj.data));
+
+        const result = try allocator.alloc(u8, data.data.len);
+        var prev_was_alpha = false;
+
+        for (data.data, 0..) |c, i| {
+            if (std.ascii.isAlphabetic(c)) {
+                if (!prev_was_alpha) {
+                    result[i] = std.ascii.toUpper(c);
+                } else {
+                    result[i] = std.ascii.toLower(c);
+                }
+                prev_was_alpha = true;
+            } else {
+                result[i] = c;
+                prev_was_alpha = false;
+            }
+        }
+
+        return try create(allocator, result);
+    }
+
+    pub fn center(allocator: std.mem.Allocator, obj: *PyObject, width: i64) !*PyObject {
+        std.debug.assert(obj.type_id == .string);
+        const data: *PyString = @ptrCast(@alignCast(obj.data));
+
+        const w: usize = @intCast(width);
+        if (w <= data.data.len) {
+            return try create(allocator, data.data);
+        }
+
+        const total_padding = w - data.data.len;
+        const left_padding = total_padding / 2;
+        const right_padding = total_padding - left_padding;
+        _ = right_padding; // Calculated for clarity, actual padding is handled by slice
+
+        const result = try allocator.alloc(u8, w);
+        @memset(result[0..left_padding], ' ');
+        @memcpy(result[left_padding..left_padding + data.data.len], data.data);
+        @memset(result[left_padding + data.data.len..], ' ');
+
+        return try create(allocator, result);
+    }
 };
 
 /// Python dict type (simplified - using StringHashMap)
@@ -727,6 +1200,13 @@ pub const PyDict = struct {
         return data.map.get(key) orelse default;
     }
 
+    pub fn get_method(obj: *PyObject, allocator: std.mem.Allocator, key: *PyObject, default: *PyObject) *PyObject {
+        std.debug.assert(obj.type_id == .dict);
+        std.debug.assert(key.type_id == .string);
+        const key_data: *PyString = @ptrCast(@alignCast(key.data));
+        return getWithDefault(obj, allocator, key_data.data, default);
+    }
+
     pub fn pop(obj: *PyObject, allocator: std.mem.Allocator, key: []const u8) ?*PyObject {
         std.debug.assert(obj.type_id == .dict);
         const data: *PyDict = @ptrCast(@alignCast(obj.data));
@@ -737,6 +1217,13 @@ pub const PyDict = struct {
             return entry.value;
         }
         return null;
+    }
+
+    pub fn pop_method(obj: *PyObject, allocator: std.mem.Allocator, key: *PyObject) ?*PyObject {
+        std.debug.assert(obj.type_id == .dict);
+        std.debug.assert(key.type_id == .string);
+        const key_data: *PyString = @ptrCast(@alignCast(key.data));
+        return pop(obj, allocator, key_data.data);
     }
 
     pub fn clear(obj: *PyObject, allocator: std.mem.Allocator) void {
@@ -752,6 +1239,57 @@ pub const PyDict = struct {
         }
 
         data.map.clearAndFree();
+    }
+
+    pub fn items(obj: *PyObject, allocator: std.mem.Allocator) !*PyObject {
+        std.debug.assert(obj.type_id == .dict);
+        const data: *PyDict = @ptrCast(@alignCast(obj.data));
+
+        // Create list to hold items
+        const result = try PyList.create(allocator);
+
+        // Add all (key, value) pairs as 2-element tuples
+        var iterator = data.map.iterator();
+        while (iterator.next()) |entry| {
+            const pair = try PyTuple.create(allocator, 2);
+            const key_obj = try PyString.create(allocator, entry.key_ptr.*);
+            PyTuple.setItem(pair, 0, key_obj);
+            PyTuple.setItem(pair, 1, entry.value_ptr.*);
+            try PyList.append(result, pair);
+        }
+
+        return result;
+    }
+
+    pub fn update(obj: *PyObject, other: *PyObject) !void {
+        std.debug.assert(obj.type_id == .dict);
+        std.debug.assert(other.type_id == .dict);
+        const data: *PyDict = @ptrCast(@alignCast(obj.data));
+        const other_data: *PyDict = @ptrCast(@alignCast(other.data));
+
+        // Copy all entries from other dict
+        var iterator = other_data.map.iterator();
+        while (iterator.next()) |entry| {
+            try data.map.put(entry.key_ptr.*, entry.value_ptr.*);
+            incref(entry.value_ptr.*);
+        }
+    }
+
+    pub fn copy(obj: *PyObject, allocator: std.mem.Allocator) !*PyObject {
+        std.debug.assert(obj.type_id == .dict);
+        const data: *PyDict = @ptrCast(@alignCast(obj.data));
+
+        const new_dict = try create(allocator);
+        const new_data: *PyDict = @ptrCast(@alignCast(new_dict.data));
+
+        // Copy all entries
+        var iterator = data.map.iterator();
+        while (iterator.next()) |entry| {
+            try new_data.map.put(entry.key_ptr.*, entry.value_ptr.*);
+            incref(entry.value_ptr.*);
+        }
+
+        return new_dict;
     }
 };
 
@@ -781,8 +1319,8 @@ test "PyList append and retrieval" {
     decref(item2, allocator);
 
     try std.testing.expectEqual(@as(usize, 2), PyList.len(list));
-    try std.testing.expectEqual(@as(i64, 10), PyInt.getValue(PyList.getItem(list, 0)));
-    try std.testing.expectEqual(@as(i64, 20), PyInt.getValue(PyList.getItem(list, 1)));
+    try std.testing.expectEqual(@as(i64, 10), PyInt.getValue(try PyList.getItem(list, 0)));
+    try std.testing.expectEqual(@as(i64, 20), PyInt.getValue(try PyList.getItem(list, 1)));
 }
 
 test "PyString creation" {

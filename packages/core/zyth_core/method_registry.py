@@ -175,6 +175,62 @@ METHOD_REGISTRY: dict[str, MethodInfo] = {
         return_type=ReturnType.PRIMITIVE_INT,
         arg_types=[ArgType.PYOBJECT],
     ),
+    "join": MethodInfo(
+        name="join",
+        runtime_type="PyString",
+        runtime_fn="join",
+        needs_allocator=True,
+        return_type=ReturnType.PYOBJECT,
+        arg_types=[ArgType.PYOBJECT],  # List to join
+    ),
+    "isdigit": MethodInfo(
+        name="isdigit",
+        runtime_type="PyString",
+        runtime_fn="isdigit",
+        needs_allocator=False,
+        return_type=ReturnType.PRIMITIVE_INT,  # Returns bool
+        arg_types=[],
+    ),
+    "isalpha": MethodInfo(
+        name="isalpha",
+        runtime_type="PyString",
+        runtime_fn="isalpha",
+        needs_allocator=False,
+        return_type=ReturnType.PRIMITIVE_INT,  # Returns bool
+        arg_types=[],
+    ),
+    "capitalize": MethodInfo(
+        name="capitalize",
+        runtime_type="PyString",
+        runtime_fn="capitalize",
+        needs_allocator=True,
+        return_type=ReturnType.PYOBJECT,
+        arg_types=[],
+    ),
+    "swapcase": MethodInfo(
+        name="swapcase",
+        runtime_type="PyString",
+        runtime_fn="swapcase",
+        needs_allocator=True,
+        return_type=ReturnType.PYOBJECT,
+        arg_types=[],
+    ),
+    "title": MethodInfo(
+        name="title",
+        runtime_type="PyString",
+        runtime_fn="title",
+        needs_allocator=True,
+        return_type=ReturnType.PYOBJECT,
+        arg_types=[],
+    ),
+    "center": MethodInfo(
+        name="center",
+        runtime_type="PyString",
+        runtime_fn="center",
+        needs_allocator=True,
+        return_type=ReturnType.PYOBJECT,
+        arg_types=[ArgType.PRIMITIVE],  # Width
+    ),
 
     # List methods
     "append": MethodInfo(
@@ -192,7 +248,7 @@ METHOD_REGISTRY: dict[str, MethodInfo] = {
         runtime_type="PyList",
         runtime_fn="pop",
         needs_allocator=True,
-        return_type=ReturnType.PYOBJECT_DIRECT,  # Returns *PyObject, no error union
+        return_type=ReturnType.PYOBJECT,  # Returns !*PyObject (can throw IndexError)
         arg_types=[],
     ),
     "extend": MethodInfo(
@@ -260,6 +316,55 @@ METHOD_REGISTRY: dict[str, MethodInfo] = {
         arg_types=[],
         is_statement=True,
     ),
+    "sort": MethodInfo(
+        name="sort",
+        runtime_type="PyList",
+        runtime_fn="sort",
+        needs_allocator=False,
+        return_type=ReturnType.VOID,
+        arg_types=[],
+        is_statement=True,
+    ),
+    "copy": MethodInfo(
+        name="copy",
+        runtime_type="PyList",
+        runtime_fn="copy",
+        needs_allocator=True,
+        return_type=ReturnType.PYOBJECT,
+        arg_types=[],
+    ),
+    "list.len": MethodInfo(
+        name="len",
+        runtime_type="PyList",
+        runtime_fn="len_method",
+        needs_allocator=False,
+        return_type=ReturnType.PRIMITIVE_INT,
+        arg_types=[],
+    ),
+    "min": MethodInfo(
+        name="min",
+        runtime_type="PyList",
+        runtime_fn="min",
+        needs_allocator=False,
+        return_type=ReturnType.PRIMITIVE_INT,
+        arg_types=[],
+    ),
+    "max": MethodInfo(
+        name="max",
+        runtime_type="PyList",
+        runtime_fn="max",
+        needs_allocator=False,
+        return_type=ReturnType.PRIMITIVE_INT,
+        arg_types=[],
+    ),
+    "sum": MethodInfo(
+        name="sum",
+        runtime_type="PyList",
+        runtime_fn="sum",
+        needs_allocator=False,
+        return_type=ReturnType.PRIMITIVE_INT,
+        arg_types=[],
+    ),
 
     # Dict methods
     "keys": MethodInfo(
@@ -274,6 +379,57 @@ METHOD_REGISTRY: dict[str, MethodInfo] = {
         name="values",
         runtime_type="PyDict",
         runtime_fn="values",
+        needs_allocator=True,
+        return_type=ReturnType.PYOBJECT,
+        arg_types=[],
+    ),
+    "items": MethodInfo(
+        name="items",
+        runtime_type="PyDict",
+        runtime_fn="items",
+        needs_allocator=True,
+        return_type=ReturnType.PYOBJECT,
+        arg_types=[],
+    ),
+    "dict.get": MethodInfo(
+        name="get",
+        runtime_type="PyDict",
+        runtime_fn="get_method",
+        needs_allocator=True,
+        return_type=ReturnType.PYOBJECT_DIRECT,
+        arg_types=[ArgType.PYOBJECT, ArgType.ANY],  # key, default (default can be primitive)
+        wrap_primitive_args=True,
+    ),
+    "dict.pop": MethodInfo(
+        name="pop",
+        runtime_type="PyDict",
+        runtime_fn="pop_method",
+        needs_allocator=True,
+        return_type=ReturnType.PYOBJECT_DIRECT,
+        arg_types=[ArgType.PYOBJECT],  # key
+    ),
+    "update": MethodInfo(
+        name="update",
+        runtime_type="PyDict",
+        runtime_fn="update",
+        needs_allocator=False,
+        return_type=ReturnType.VOID,
+        arg_types=[ArgType.PYOBJECT],  # other dict
+        is_statement=True,
+    ),
+    "dict.clear": MethodInfo(
+        name="clear",
+        runtime_type="PyDict",
+        runtime_fn="clear",
+        needs_allocator=True,
+        return_type=ReturnType.VOID,
+        arg_types=[],
+        is_statement=True,
+    ),
+    "dict.copy": MethodInfo(
+        name="copy",
+        runtime_type="PyDict",
+        runtime_fn="copy",
         needs_allocator=True,
         return_type=ReturnType.PYOBJECT,
         arg_types=[],

@@ -2,9 +2,21 @@
 Zyth Code Generator - Converts Python AST to Zig code
 """
 import ast
-from typing import List
+from typing import List, Dict, Optional
+from dataclasses import dataclass
 from zyth_core.parser import ParsedModule
 from zyth_core.method_registry import get_method_info, ReturnType
+
+
+@dataclass
+class ClassInfo:
+    """Metadata for a class definition"""
+    name: str
+    base_class: Optional[str]  # Parent class name (None for no inheritance)
+    fields: Dict[str, str]  # field_name -> type ("int", "string", etc.)
+    methods: Dict[str, dict]  # method_name -> signature dict
+    method_nodes: Dict[str, ast.FunctionDef]  # method AST nodes for inheritance
+    init_params: List[tuple[str, str]]  # (param_name, param_type)
 
 
 class ZigCodeGenerator:
@@ -17,7 +29,12 @@ class ZigCodeGenerator:
         self.needs_allocator = False  # Track if we need allocator
         self.declared_vars: set[str] = set()  # Track declared variables
         self.reassigned_vars: set[str] = set()  # Track variables that are reassigned
-        self.var_types: dict[str, str] = {}  # Track variable types: "int", "string", "list", "pyint"
+        self.var_types: dict[str, str] = {}  # Track variable types: "int", "string", "list", "pyint", or class names
+        self.list_element_types: dict[str, str] = {}  # Track list element types: "string", "int"
+        self.tuple_element_types: dict[str, str] = {}  # Track tuple element types: "string", "int"
+        self.function_signatures: dict[str, dict] = {}  # Track function signatures for proper calling
+        self.class_definitions: Dict[str, ClassInfo] = {}  # Track class definitions
+        self.current_class: Optional[str] = None  # Track which class we're currently in
 
     def indent(self) -> str:
         """Get current indentation"""
@@ -34,6 +51,12 @@ class ZigCodeGenerator:
             self.needs_allocator = True
         elif isinstance(node, ast.List):
             # List literal requires runtime
+            self.needs_runtime = True
+            self.needs_allocator = True
+            for elem in node.elts:
+                self._detect_runtime_needs(elem)
+        elif isinstance(node, ast.Tuple):
+            # Tuple literal requires runtime
             self.needs_runtime = True
             self.needs_allocator = True
             for elem in node.elts:
@@ -144,6 +167,44 @@ class ZigCodeGenerator:
 
         # Reset declared_vars for code generation phase
         self.declared_vars = set()
+        # Separate classes, functions, and top-level code
+        classes = []
+        functions = []
+        top_level = []
+
+        for node in parsed.ast_tree.body:
+            if isinstance(node, ast.ClassDef):
+                classes.append(node)
+            elif isinstance(node, ast.FunctionDef):
+                functions.append(node)
+            else:
+                top_level.append(node)
+
+        # Pre-analyze classes to populate class_definitions
+        # (This is done during visit_ClassDef, but we need to know class names before)
+        for cls in classes:
+            # Extract base class if present
+            cls_base = None
+            if cls.bases and isinstance(cls.bases[0], ast.Name):
+                cls_base = cls.bases[0].id
+
+            # Check if class has string-typed parameters (need runtime)
+            for item in cls.body:
+                if isinstance(item, ast.FunctionDef) and item.name == "__init__":
+                    for arg in item.args.args[1:]:  # Skip self
+                        if arg.annotation and isinstance(arg.annotation, ast.Name):
+                            if arg.annotation.id == "str":
+                                self.needs_runtime = True
+                                self.needs_allocator = True
+            # Just register the class name so we can detect class instantiation
+            self.class_definitions[cls.name] = ClassInfo(
+                name=cls.name,
+                base_class=cls_base,
+                fields={},
+                methods={},
+                method_nodes={},
+                init_params=[]
+            )
 
         # Zig imports
         self.emit("const std = @import(\"std\");")
@@ -151,24 +212,61 @@ class ZigCodeGenerator:
             # TODO: Update path to runtime module once we set up build system
             self.emit("const runtime = @import(\"runtime\");")
         self.emit("")
+        # Pre-analyze functions to populate function_signatures before generating code
+        for func in functions:
+            needs_allocator = self._function_needs_allocator(func)
+            returns_pyobject = False
+            if func.returns and isinstance(func.returns, ast.Name):
+                if func.returns.id in ["str", "list", "dict"]:
+                    returns_pyobject = True
+            self.function_signatures[func.name] = {
+                "needs_allocator": needs_allocator,
+                "param_count": len(func.args.args),
+                "returns_pyobject": returns_pyobject,
+            }
 
-        # Separate functions from top-level code
-        functions = []
-        top_level = []
+        # Check if top-level code needs allocator
+        # Need allocator if: (1) creates runtime objects OR (2) calls functions/classes that need allocator
+        top_level_needs_allocator = False
+        for node in top_level:
+            # Skip docstrings (they're just comments, not executed code)
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                continue
 
-        for node in parsed.ast_tree.body:
-            if isinstance(node, ast.FunctionDef):
-                functions.append(node)
-            else:
-                top_level.append(node)
+            if self._stmt_needs_runtime(node):
+                top_level_needs_allocator = True
+                break
+            # Check if calling a function or class constructor that needs allocator
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+                if isinstance(node.value.func, ast.Name):
+                    func_name = node.value.func.id
+                    # Check if it's a function call
+                    if func_name in self.function_signatures:
+                        if self.function_signatures[func_name]["needs_allocator"]:
+                            top_level_needs_allocator = True
+                            break
+                    # Check if it's a class instantiation (always needs allocator)
+                    if func_name in self.class_definitions:
+                        top_level_needs_allocator = True
+                        break
+            # Check if calling a method on an instance
+            elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+                if isinstance(node.value.func, ast.Attribute):
+                    # Method call - might need allocator
+                    top_level_needs_allocator = True
+                    break
 
-        # Generate functions first
+        # Generate classes
+        for cls in classes:
+            self.visit(cls)
+
+        # Generate functions
         for func in functions:
             self.visit(func)
 
         # Wrap top-level code in main function
         if top_level:
-            if self.needs_allocator:
+            if top_level_needs_allocator:
                 self.emit("pub fn main() !void {")
                 self.indent_level += 1
                 self.emit("var gpa = std.heap.GeneralPurposeAllocator(.{}){};")
@@ -199,15 +297,95 @@ class ZigCodeGenerator:
             f"Code generation not implemented for {node.__class__.__name__}"
         )
 
+    def _function_needs_allocator(self, node: ast.FunctionDef) -> bool:
+        """Check if function needs allocator parameter
+
+        Functions need allocator only if they:
+        - Create new PyObjects (strings, lists, dicts)
+        - Call methods that need allocator
+        - Return runtime types
+
+        Just having runtime parameters doesn't require allocator.
+        """
+        # Check if function body creates/modifies runtime objects
+        for stmt in node.body:
+            if self._stmt_needs_runtime(stmt):
+                return True
+        # Check if return type is runtime type (will need to create PyObject)
+        if node.returns and isinstance(node.returns, ast.Name):
+            if node.returns.id in ["str", "list", "dict"]:
+                return True
+        return False
+
+    def _stmt_needs_runtime(self, node: ast.AST) -> bool:
+        """Check if a statement needs runtime"""
+        if isinstance(node, ast.Expr):
+            return self._expr_needs_runtime(node.value)
+        elif isinstance(node, ast.Assign):
+            return self._expr_needs_runtime(node.value)
+        elif isinstance(node, ast.Return):
+            if node.value:
+                return self._expr_needs_runtime(node.value)
+        elif isinstance(node, ast.If):
+            for stmt in node.body:
+                if self._stmt_needs_runtime(stmt):
+                    return True
+            for stmt in node.orelse:
+                if self._stmt_needs_runtime(stmt):
+                    return True
+        elif isinstance(node, ast.While):
+            for stmt in node.body:
+                if self._stmt_needs_runtime(stmt):
+                    return True
+        elif isinstance(node, ast.For):
+            for stmt in node.body:
+                if self._stmt_needs_runtime(stmt):
+                    return True
+        return False
+
+    def _expr_needs_runtime(self, node: ast.AST) -> bool:
+        """Check if an expression needs runtime"""
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return True
+        elif isinstance(node, ast.List) or isinstance(node, ast.Dict) or isinstance(node, ast.Tuple):
+            return True
+        elif isinstance(node, ast.BinOp):
+            if isinstance(node.op, ast.Add):
+                # Check if it's string concatenation
+                if self._expr_needs_runtime(node.left) or self._expr_needs_runtime(node.right):
+                    return True
+        elif isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Attribute):
+                # Method calls on runtime types
+                return True
+        return False
+
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         """Generate function definition"""
+        # Get pre-computed signature
+        sig = self.function_signatures[node.name]
+        needs_allocator = sig["needs_allocator"]
+
+        # Determine if function needs error union
+        needs_error_union = needs_allocator  # For now, assume allocator implies error union
+
         # Get return type
-        return_type = self.visit_type(node.returns) if node.returns else "void"
+        return_type = self.visit_type(node.returns, for_runtime=needs_allocator) if node.returns else "void"
+        if needs_error_union and return_type != "void":
+            return_type = f"!{return_type}"
+        elif needs_error_union:
+            return_type = "!void"
+
+        # Update signature with full return type
+        sig["return_type"] = return_type
 
         # Build parameter list
         params = []
+        if needs_allocator:
+            params.append("allocator: std.mem.Allocator")
+
         for arg in node.args.args:
-            arg_type = self.visit_type(arg.annotation) if arg.annotation else "i64"
+            arg_type = self.visit_type(arg.annotation, for_runtime=needs_allocator) if arg.annotation else "i64"
             params.append(f"{arg.arg}: {arg_type}")
 
         params_str = ", ".join(params)
@@ -215,6 +393,18 @@ class ZigCodeGenerator:
         # Function signature
         self.emit(f"fn {node.name}({params_str}) {return_type} {{")
         self.indent_level += 1
+
+        # Track parameter types for use in function body
+        for arg in node.args.args:
+            if arg.annotation and isinstance(arg.annotation, ast.Name):
+                if arg.annotation.id == "str":
+                    self.var_types[arg.arg] = "string"
+                elif arg.annotation.id == "list":
+                    self.var_types[arg.arg] = "list"
+                elif arg.annotation.id == "dict":
+                    self.var_types[arg.arg] = "dict"
+                elif arg.annotation.id == "int":
+                    self.var_types[arg.arg] = "int"
 
         # Function body
         for stmt in node.body:
@@ -224,15 +414,278 @@ class ZigCodeGenerator:
         self.emit("}")
         self.emit("")
 
-    def visit_type(self, node: ast.AST) -> str:
-        """Convert Python type to Zig type"""
-        if isinstance(node, ast.Name):
-            type_map = {
-                "int": "i64",
-                "float": "f64",
-                "bool": "bool",
-                "str": "[]const u8",
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        """Generate class definition as Zig struct"""
+        class_name = node.name
+        self.current_class = class_name
+
+        # Extract base class (support single inheritance only)
+        base_class: Optional[str] = None
+        if node.bases:
+            if len(node.bases) > 1:
+                raise NotImplementedError("Multiple inheritance not supported")
+            if isinstance(node.bases[0], ast.Name):
+                base_class = node.bases[0].id
+
+        # Extract __init__ method to determine fields and parameters
+        init_method = None
+        methods = []
+        fields: Dict[str, str] = {}
+        init_params: List[tuple[str, str]] = []
+
+        for item in node.body:
+            if isinstance(item, ast.FunctionDef):
+                if item.name == "__init__":
+                    init_method = item
+                    # Extract init parameters (skip 'self')
+                    for arg in item.args.args[1:]:  # Skip self
+                        param_type = "i64"  # Default to int
+                        if arg.annotation and isinstance(arg.annotation, ast.Name):
+                            param_type = self._map_python_type_to_zig(arg.annotation.id)
+                        init_params.append((arg.arg, param_type))
+
+                    # Extract fields from self.field = value assignments
+                    for stmt in item.body:
+                        if isinstance(stmt, ast.Assign):
+                            for target in stmt.targets:
+                                if isinstance(target, ast.Attribute):
+                                    if isinstance(target.value, ast.Name) and target.value.id == "self":
+                                        # This is a field assignment: self.field = value
+                                        field_name = target.attr
+                                        # Infer type from the value
+                                        field_type = self._infer_field_type(stmt.value, init_params)
+                                        fields[field_name] = field_type
+                else:
+                    methods.append(item)
+
+        # Analyze method signatures and store AST nodes
+        method_sigs = {}
+        method_nodes = {}
+        for method in methods:
+            return_type = "void"
+            needs_allocator = False
+            if method.returns and isinstance(method.returns, ast.Name):
+                return_type = self._map_python_type_to_zig(method.returns.id)
+                if return_type == "*runtime.PyObject":
+                    needs_allocator = True
+            method_sigs[method.name] = {
+                "return_type": return_type,
+                "needs_allocator": needs_allocator
             }
+            method_nodes[method.name] = method
+
+        # Store class metadata
+        self.class_definitions[class_name] = ClassInfo(
+            name=class_name,
+            base_class=base_class,
+            fields=fields,
+            methods=method_sigs,
+            method_nodes=method_nodes,
+            init_params=init_params
+        )
+
+        # Generate Zig struct
+        self.emit(f"const {class_name} = struct {{")
+        self.indent_level += 1
+
+        # Generate field declarations
+        for field_name, field_type in fields.items():
+            self.emit(f"{field_name}: {field_type},")
+
+        if fields:
+            self.emit("")
+
+        # Generate init function (constructor)
+        if init_method:
+            self._generate_init_function(class_name, init_method, init_params, fields)
+
+        # Generate deinit function (destructor)
+        self._generate_deinit_function(class_name, fields)
+
+        # Generate methods
+        for method in methods:
+            self._generate_method(class_name, method)
+
+
+        # Generate parent methods that are not overridden
+        child_method_names = {m.name for m in methods}
+        if base_class:
+            parent_info = self.class_definitions[base_class]
+            for parent_method_name, parent_method_node in parent_info.method_nodes.items():
+                if parent_method_name not in child_method_names and parent_method_name not in ["init", "deinit"]:
+                    # Generate inherited method with child class type
+                    self._generate_method(class_name, parent_method_node)
+
+        self.indent_level -= 1
+        self.emit("};")
+        self.emit("")
+
+        self.current_class = None
+
+    def _map_python_type_to_zig(self, python_type: str) -> str:
+        """Map Python type annotation to Zig type"""
+        type_map = {
+            "int": "i64",
+            "float": "f64",
+            "bool": "bool",
+            "str": "*runtime.PyObject",
+        }
+        return type_map.get(python_type, "i64")
+
+    def _infer_field_type(self, value_node: ast.AST, init_params: List[tuple[str, str]]) -> str:
+        """Infer field type from assignment value"""
+        # If value is a parameter, use parameter type
+        if isinstance(value_node, ast.Name):
+            param_name = value_node.id
+            for pname, ptype in init_params:
+                if pname == param_name:
+                    return ptype
+        # If value is a constant, infer from constant type
+        elif isinstance(value_node, ast.Constant):
+            if isinstance(value_node.value, int):
+                return "i64"
+            elif isinstance(value_node.value, str):
+                return "*runtime.PyObject"
+        # Default to i64
+        return "i64"
+
+    def _generate_init_function(self, class_name: str, init_method: ast.FunctionDef,
+                                init_params: List[tuple[str, str]], fields: Dict[str, str]) -> None:
+        """Generate the init (constructor) function"""
+        # Build parameter list
+        params = ["allocator: std.mem.Allocator"]
+        for param_name, param_type in init_params:
+            params.append(f"{param_name}: {param_type}")
+
+        params_str = ", ".join(params)
+
+        self.emit(f"pub fn init({params_str}) !*{class_name} {{")
+        self.indent_level += 1
+
+        # Create instance
+        self.emit(f"const instance = try allocator.create({class_name});")
+
+        # Generate field initializations from __init__ body
+        for stmt in init_method.body:
+            if isinstance(stmt, ast.Assign):
+                for target in stmt.targets:
+                    if isinstance(target, ast.Attribute):
+                        if isinstance(target.value, ast.Name) and target.value.id == "self":
+                            field_name = target.attr
+                            # Generate field assignment
+                            value_code, _ = self.visit_expr(stmt.value)
+                            self.emit(f"instance.{field_name} = {value_code};")
+
+        self.emit(f"return instance;")
+
+        self.indent_level -= 1
+        self.emit("}")
+        self.emit("")
+
+    def _generate_deinit_function(self, class_name: str, fields: Dict[str, str]) -> None:
+        """Generate the deinit (destructor) function"""
+        self.emit(f"pub fn deinit(self: *{class_name}, allocator: std.mem.Allocator) void {{")
+        self.indent_level += 1
+
+        # TODO: Add cleanup for PyObject fields if needed
+        # For now, just destroy the instance
+        self.emit("allocator.destroy(self);")
+
+        self.indent_level -= 1
+        self.emit("}")
+        self.emit("")
+
+
+    def _uses_variable(self, node: ast.AST, var_name: str) -> bool:
+        """Check if an AST node uses a specific variable"""
+        for child in ast.walk(node):
+            if isinstance(child, ast.Name) and child.id == var_name:
+                return True
+            elif isinstance(child, ast.Attribute) and isinstance(child.value, ast.Name):
+                if child.value.id == var_name:
+                    return True
+        return False
+
+    def _generate_method(self, class_name: str, method: ast.FunctionDef) -> None:
+        """Generate an instance method"""
+        # Get return type
+        return_type = "void"
+        needs_error_union = False
+        needs_allocator_param = False
+
+        if method.returns and isinstance(method.returns, ast.Name):
+            return_type = self._map_python_type_to_zig(method.returns.id)
+            # String/list/dict returns need error union and allocator
+            if return_type == "*runtime.PyObject":
+                needs_error_union = True
+                needs_allocator_param = True
+
+        # Build parameter list (self + other params)
+        # Check if method body uses self
+        uses_self = any(self._uses_variable(stmt, "self") for stmt in method.body)
+        
+        # Build parameter list (prefix self with _ if unused)
+        self_param = "_: *{}" if not uses_self else "self: *{}"
+        params = [self_param.format(class_name)]
+
+        # Add allocator if needed
+        if needs_allocator_param:
+            params.append("allocator: std.mem.Allocator")
+
+        for arg in method.args.args[1:]:  # Skip 'self'
+            param_type = "i64"
+            if arg.annotation and isinstance(arg.annotation, ast.Name):
+                param_type = self._map_python_type_to_zig(arg.annotation.id)
+            params.append(f"{arg.arg}: {param_type}")
+
+        params_str = ", ".join(params)
+
+        # Add error union syntax if needed
+        if needs_error_union:
+            return_type = f"!{return_type}"
+
+        self.emit(f"pub fn {method.name}({params_str}) {return_type} {{")
+        self.indent_level += 1
+
+        # Generate method body
+        # Track 'self' as the current instance
+        old_var_types = self.var_types.copy()
+        self.var_types["self"] = class_name
+
+        for stmt in method.body:
+            self.visit(stmt)
+
+        # Restore var_types
+        self.var_types = old_var_types
+
+        self.indent_level -= 1
+        self.emit("}")
+        self.emit("")
+
+    def visit_type(self, node: ast.AST, for_runtime: bool = False) -> str:
+        """Convert Python type to Zig type
+
+        Args:
+            node: AST node representing the type
+            for_runtime: If True, map types to runtime PyObject types
+        """
+        if isinstance(node, ast.Name):
+            if for_runtime or self.needs_runtime:
+                type_map = {
+                    "int": "i64",
+                    "float": "f64",
+                    "bool": "bool",
+                    "str": "*runtime.PyObject",
+                    "list": "*runtime.PyObject",
+                    "dict": "*runtime.PyObject",
+                }
+            else:
+                type_map = {
+                    "int": "i64",
+                    "float": "f64",
+                    "bool": "bool",
+                    "str": "[]const u8",
+                }
             return type_map.get(node.id, "anytype")
         return "anytype"
 
@@ -366,6 +819,114 @@ class ZigCodeGenerator:
         else:
             self.emit("return;")
 
+    def visit_Try(self, node: ast.Try) -> None:
+        """Generate try/except block with proper error handling"""
+        if not node.handlers:
+            # No except blocks - just emit the try body
+            for stmt in node.body:
+                self.visit(stmt)
+            return
+
+        # Parse exception handlers
+        handlers_info = []
+        for handler in node.handlers:
+            if handler.type is None:
+                # Bare except: catches all errors
+                handlers_info.append((None, handler.body))
+            elif isinstance(handler.type, ast.Name):
+                # Specific exception type
+                exc_type = handler.type.id
+                handlers_info.append((exc_type, handler.body))
+            else:
+                raise NotImplementedError("Complex exception types not supported")
+
+        # Generate labeled block for break
+        block_label = f"try_block_{id(node)}"
+
+        # Save current try context
+        prev_in_try = getattr(self, '_in_try_block', False)
+        prev_handlers = getattr(self, '_current_handlers', [])
+        prev_label = getattr(self, '_current_try_label', None)
+
+        # Set new try context
+        self._in_try_block = True
+        self._current_handlers = handlers_info
+        self._current_try_label = block_label
+
+        # Emit labeled block
+        self.emit(f"{block_label}: {{")
+        self.indent_level += 1
+
+        # Emit try block body
+        for stmt in node.body:
+            self.visit(stmt)
+
+        self.indent_level -= 1
+        self.emit("}")
+
+        # Restore previous context
+        self._in_try_block = prev_in_try
+        self._current_handlers = prev_handlers
+        self._current_try_label = prev_label
+
+    def _generate_catch_handler(self) -> str:
+        """Generate catch handler code for current try block context"""
+        if not getattr(self, '_in_try_block', False):
+            return ""
+
+        handlers = getattr(self, '_current_handlers', [])
+        if not handlers:
+            return ""
+
+        label = getattr(self, '_current_try_label', 'try_block')
+
+        # Generate catch block
+        lines = [" catch |err| {"]
+
+        # Check each exception type
+        for exc_type, handler_body in handlers:
+            if exc_type is None:
+                # Bare except - catches all
+                lines.append("    // Catch all exceptions")
+                for stmt in handler_body:
+                    # We need to generate the handler body inline
+                    # For now, just emit print statements
+                    if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
+                        if isinstance(stmt.value.func, ast.Name) and stmt.value.func.id == "print":
+                            if stmt.value.args:
+                                arg = stmt.value.args[0]
+                                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                                    lines.append(f'    std.debug.print("{arg.value}\\n", .{{}});')
+                lines.append(f"    break :{label};")
+            else:
+                # Specific exception type
+                zig_error = f"error.{exc_type}"
+                lines.append(f"    if (err == {zig_error}) {{")
+                for stmt in handler_body:
+                    if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
+                        if isinstance(stmt.value.func, ast.Name) and stmt.value.func.id == "print":
+                            if stmt.value.args:
+                                arg = stmt.value.args[0]
+                                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                                    lines.append(f'        std.debug.print("{arg.value}\\n", .{{}});')
+                lines.append(f"        break :{label};")
+                lines.append("    }")
+
+        # If no handler matched, re-throw
+        lines.append("    return err;")
+        lines.append("}")
+
+        return "".join(lines)
+
+    def _wrap_with_try(self, code: str) -> str:
+        """Wrap error-returning code with appropriate error handling"""
+        if getattr(self, '_in_try_block', False):
+            # Inside try block - use catch with handler
+            return code + self._generate_catch_handler()
+        else:
+            # Outside try block - use regular try
+            return f"try {code}"
+
     def _flatten_binop_chain(self, node: ast.BinOp, op_type: type) -> list[ast.AST]:
         """Flatten chained binary operations like a + b + c into [a, b, c]"""
         result = []
@@ -376,10 +937,48 @@ class ZigCodeGenerator:
         result.append(node.right)
         return result
 
+    def _unwrap_primitive_markers(self, expr_code: str, context_id: int) -> str:
+        """Unwrap __WRAP_PRIMITIVE__ markers by creating temp variables."""
+        if "__WRAP_PRIMITIVE__" not in expr_code:
+            return expr_code
+
+        import re
+        marker_pattern = r'__WRAP_PRIMITIVE__([^,\)]+)'
+        matches = re.findall(marker_pattern, expr_code)
+
+        if not matches:
+            return expr_code
+
+        replacements = []
+        for i, prim_val in enumerate(matches):
+            temp_var = f"_wrapped_{context_id}_{i}"
+            self.emit(f"const {temp_var} = try runtime.PyInt.create(allocator, {prim_val});")
+            self.emit(f"defer runtime.decref({temp_var}, allocator);")
+            replacements.append((f"__WRAP_PRIMITIVE__{prim_val}", temp_var))
+
+        for marker, temp_var in replacements:
+            expr_code = expr_code.replace(marker, temp_var)
+
+        return expr_code
+
     def visit_Assign(self, node: ast.Assign) -> None:
         """Generate variable assignment"""
         # For now, assume single target
         target = node.targets[0]
+
+        # Handle attribute assignment (e.g., self.value = ...)
+        if isinstance(target, ast.Attribute):
+            # This is an attribute assignment like self.field = value
+            obj_code, _ = self.visit_expr(target.value)
+            attr_name = target.attr
+            value_code, value_try = self.visit_expr(node.value)
+
+            if value_try:
+                self.emit(f"{obj_code}.{attr_name} = try {value_code};")
+            else:
+                self.emit(f"{obj_code}.{attr_name} = {value_code};")
+            return
+
         if isinstance(target, ast.Name):
             # Determine if this is first assignment or reassignment
             var_keyword = "var" if target.id in self.reassigned_vars else "const"
@@ -470,6 +1069,61 @@ class ZigCodeGenerator:
                         self.emit(f"runtime.decref({temp_var}, allocator);")
                 return
 
+            # Special handling for tuple literals
+            if isinstance(node.value, ast.Tuple):
+                # Track this as a tuple type
+                self.var_types[target.id] = "tuple"
+
+                # Detect element type (check if all elements are same type)
+                if node.value.elts:
+                    # Check if all elements are the same type
+                    all_same_type = True
+                    elem_type = None
+                    for elem in node.value.elts:
+                        if isinstance(elem, ast.Constant):
+                            if elem_type is None:
+                                if isinstance(elem.value, str):
+                                    elem_type = "string"
+                                elif isinstance(elem.value, int):
+                                    elem_type = "int"
+                            else:
+                                current_type = None
+                                if isinstance(elem.value, str):
+                                    current_type = "string"
+                                elif isinstance(elem.value, int):
+                                    current_type = "int"
+                                if current_type != elem_type:
+                                    all_same_type = False
+                                    break
+                    # Only track if all elements are the same type
+                    if all_same_type and elem_type:
+                        self.tuple_element_types[target.id] = elem_type
+
+                # Create tuple with fixed size
+                tuple_size = len(node.value.elts)
+                if is_first_assignment:
+                    self.emit(f"{var_keyword} {target.id} = try runtime.PyTuple.create(allocator, {tuple_size});")
+                    self.emit(f"defer runtime.decref({target.id}, allocator);")
+                else:
+                    self.emit(f"{target.id} = try runtime.PyTuple.create(allocator, {tuple_size});")
+
+                # Set each element
+                for idx, elem in enumerate(node.value.elts):
+                    elem_code, elem_try = self.visit_expr(elem)
+                    if elem_try:
+                        # PyObject - need to create it first
+                        temp_var = f"_temp_elem_{id(elem)}"
+                        self.emit(f"const {temp_var} = try {elem_code};")
+                        self.emit(f"runtime.PyTuple.setItem({target.id}, {idx}, {temp_var});")
+                        self.emit(f"runtime.decref({temp_var}, allocator);")
+                    else:
+                        # Primitive value - wrap in PyInt
+                        temp_var = f"_temp_elem_{id(elem)}"
+                        self.emit(f"const {temp_var} = try runtime.PyInt.create(allocator, {elem_code});")
+                        self.emit(f"runtime.PyTuple.setItem({target.id}, {idx}, {temp_var});")
+                        self.emit(f"runtime.decref({temp_var}, allocator);")
+                return
+
             # Special handling for list comprehensions
             if isinstance(node.value, ast.ListComp):
                 # Track this as a list type
@@ -502,8 +1156,8 @@ class ZigCodeGenerator:
                     self.emit(f"while ({unique_idx} < @as(i64, @intCast(runtime.PyList.len({source_var})))) : ({unique_idx} += 1) {{")
                     self.indent_level += 1
 
-                    # Get item from source list
-                    self.emit(f"const {loop_var} = runtime.PyList.getItem({source_var}, @intCast({unique_idx}));")
+                    # Get item from source list (getItem can throw IndexError)
+                    self.emit(f"const {loop_var} = try runtime.PyList.getItem({source_var}, @intCast({unique_idx}));")
 
                     # Track loop variable as pyint (PyObject containing int)
                     self.var_types[loop_var] = "pyint"
@@ -548,9 +1202,20 @@ class ZigCodeGenerator:
                     raise NotImplementedError("List comprehension only supports iterating over list variables for now")
                 return
 
-            # Special handling for subscript assignment (track as pyint)
+            # Special handling for subscript assignment (infer type from list element type)
             if isinstance(node.value, ast.Subscript):
-                self.var_types[target.id] = "pyint"
+                # Check if we're subscripting a list with known element type
+                if isinstance(node.value.value, ast.Name):
+                    list_var = node.value.value.id
+                    elem_type = self.list_element_types.get(list_var)
+                    if elem_type == "string":
+                        self.var_types[target.id] = "string"
+                    else:
+                        # Default to pyint for lists with unknown or int elements
+                        self.var_types[target.id] = "pyint"
+                else:
+                    # Unknown subscript source, default to pyint
+                    self.var_types[target.id] = "pyint"
 
             # Special handling for list.pop() (track as pyint)
             if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute):
@@ -640,6 +1305,29 @@ class ZigCodeGenerator:
                     if source_type:
                         self.var_types[target.id] = source_type
 
+            # Track type for class instantiation
+            if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name):
+                func_name = node.value.func.id
+                # Check if it's a class constructor
+                if func_name in self.class_definitions:
+                    self.var_types[target.id] = func_name  # Track as class instance
+
+            # Track type for user-defined function calls
+            if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name):
+                func_name = node.value.func.id
+                if func_name in self.function_signatures:
+                    sig = self.function_signatures[func_name]
+                    if sig["returns_pyobject"]:
+                        self.var_types[target.id] = "string"  # Default to string for PyObjects
+                    else:
+                        self.var_types[target.id] = "int"  # Default to int for primitives
+
+            # Track type when assigning from another variable
+            if isinstance(node.value, ast.Name):
+                source_type = self.var_types.get(node.value.id)
+                if source_type:
+                    self.var_types[target.id] = source_type
+
             # Track type for method calls that return primitives
             if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute):
                 method_name = node.value.func.attr
@@ -654,40 +1342,69 @@ class ZigCodeGenerator:
                 if method_info and method_info.return_type == ReturnType.PRIMITIVE_INT:
                     self.var_types[target.id] = "int"
 
+                # Track element types for methods that return lists
+                if method_info and method_info.return_type == ReturnType.PYOBJECT:
+                    if method_name == "split":
+                        # split() returns a list of strings
+                        self.var_types[target.id] = "list"
+                        self.list_element_types[target.id] = "string"
+                    elif method_name == "copy":
+                        # copy() returns same type as source
+                        if obj_type == "dict":
+                            self.var_types[target.id] = "dict"
+                        elif obj_type == "list":
+                            self.var_types[target.id] = "list"
+
+                # Track types for methods that return PyObject directly (no error union)
+                if method_info and method_info.return_type == ReturnType.PYOBJECT_DIRECT:
+                    if method_name == "get":
+                        # dict.get() returns PyInt (assume int values for now)
+                        self.var_types[target.id] = "pyint"
+                    elif method_name == "copy":
+                        # copy() returns same type as source
+                        if obj_type == "dict":
+                            self.var_types[target.id] = "dict"
+                        elif obj_type == "list":
+                            self.var_types[target.id] = "list"
+
             # Default path
             value_code, needs_try = self.visit_expr(node.value)
 
-            # Handle __WRAP_PRIMITIVE__ markers in value_code
-            if "__WRAP_PRIMITIVE__" in value_code:
-                # Extract the wrapped primitives and create temp variables
-                temp_vars = []
-                parts = value_code.split("__WRAP_PRIMITIVE__")
-                for i in range(1, len(parts)):
-                    # Extract the primitive value (everything until next delimiter or end)
-                    prim_val = parts[i].split(",")[0].split(")")[0].strip()
-                    temp_var = f"_wrapped_{target.id}_{i}"
-                    self.emit(f"const {temp_var} = try runtime.PyInt.create(allocator, {prim_val});")
-                    self.emit(f"defer runtime.decref({temp_var}, allocator);")
-                    temp_vars.append((f"__WRAP_PRIMITIVE__{prim_val}", temp_var))
-
-                # Replace markers with temp vars
-                for marker, temp_var in temp_vars:
-                    value_code = value_code.replace(marker, temp_var)
+            # Unwrap any __WRAP_PRIMITIVE__ markers
+            value_code = self._unwrap_primitive_markers(value_code, id(node))
 
             if is_first_assignment:
                 if needs_try:
-                    self.emit(f"{var_keyword} {target.id} = try {value_code};")
-                    self.emit(f"defer runtime.decref({target.id}, allocator);")
+                    wrapped_code = self._wrap_with_try(value_code)
+                    self.emit(f"{var_keyword} {target.id} = {wrapped_code};")
+                    # Check if it's a class instance (needs deinit) or PyObject (needs decref)
+                    var_type = self.var_types.get(target.id)
+                    if var_type and var_type in self.class_definitions:
+                        # Class instance - use deinit
+                        self.emit(f"defer {target.id}.deinit(allocator);")
+                    else:
+                        # PyObject - use decref
+                        self.emit(f"defer runtime.decref({target.id}, allocator);")
                 else:
                     # For var, need explicit type; for const, type is inferred
                     if var_keyword == "var":
-                        self.emit(f"{var_keyword} {target.id}: i64 = {value_code};")
+                        # Determine type annotation based on tracked type
+                        var_type = self.var_types.get(target.id)
+                        if var_type == "string" or var_type == "list" or var_type == "dict":
+                            type_annotation = "*runtime.PyObject"
+                        elif var_type and var_type in self.class_definitions:
+                            # Class instance type
+                            type_annotation = f"*{var_type}"
+                        else:
+                            type_annotation = "i64"
+                        self.emit(f"{var_keyword} {target.id}: {type_annotation} = {value_code};")
                     else:
                         self.emit(f"{var_keyword} {target.id} = {value_code};")
             else:
                 # Reassignment - no var/const keyword
                 if needs_try:
-                    self.emit(f"{target.id} = try {value_code};")
+                    wrapped_code = self._wrap_with_try(value_code)
+                    self.emit(f"{target.id} = {wrapped_code};")
                 else:
                     self.emit(f"{target.id} = {value_code};")
 
@@ -699,20 +1416,26 @@ class ZigCodeGenerator:
 
         expr_code, needs_try = self.visit_expr(node.value)
 
+        # Unwrap any __WRAP_PRIMITIVE__ markers
+        expr_code = self._unwrap_primitive_markers(expr_code, id(node))
+
         # Special handling for statement methods with primitive args
-        if expr_code.startswith("__list_"):
+        if expr_code.startswith("__list_") or expr_code.startswith("__dict_"):
             parts = expr_code.split("__")
-            method_type = parts[1]  # "list_append", "list_remove", etc
+            method_type = parts[1]  # "list_append", "dict_update", etc
             obj_code = parts[2]
 
             if len(parts) > 3:
                 # Parse all arguments (format: "arg1|||try1;;;arg2|||try2")
-                args_encoded = parts[3]
+                # Args might contain __ themselves, so rejoin parts[3:]
+                args_encoded = "__".join(parts[3:])
                 args_list = []
                 if args_encoded:
                     for arg_part in args_encoded.split(";;;"):
                         if "|||" in arg_part:
-                            arg_code, arg_try_str = arg_part.split("|||")
+                            arg_code, arg_try_str = arg_part.split("|||", 1)
+                            # Unwrap any markers in the argument
+                            arg_code = self._unwrap_primitive_markers(arg_code, id(node))
                             args_list.append((arg_code, arg_try_str == "True"))
 
                 # Handle methods by type
@@ -757,12 +1480,22 @@ class ZigCodeGenerator:
 
                 elif method_type == "list_clear":
                     self.emit(f"runtime.PyList.clear({obj_code}, allocator);")
+
+                # Dict statement methods with args
+                elif method_type == "dict_update":
+                    arg_code, arg_try = args_list[0]
+                    self.emit(f"try runtime.PyDict.update({obj_code}, {arg_code});")
+
             else:
-                # No args (like reverse)
+                # No args (like reverse, sort, clear)
                 if method_type == "list_reverse":
                     self.emit(f"runtime.PyList.reverse({obj_code});")
                 elif method_type == "list_clear":
                     self.emit(f"runtime.PyList.clear({obj_code}, allocator);")
+                elif method_type == "list_sort":
+                    self.emit(f"runtime.PyList.sort({obj_code});")
+                elif method_type == "dict_clear":
+                    self.emit(f"runtime.PyDict.clear({obj_code}, allocator);")
             return
 
         if needs_try:
@@ -814,7 +1547,10 @@ class ZigCodeGenerator:
             # Check if this is string concatenation
             if left_try or right_try:
                 # String concatenation -> PyString.concat
-                return (f"runtime.PyString.concat(allocator, {left_code}, {right_code})", True)
+                # Wrap operands with try if needed
+                left_expr = f"try {left_code}" if left_try else left_code
+                right_expr = f"try {right_code}" if right_try else right_code
+                return (f"runtime.PyString.concat(allocator, {left_expr}, {right_expr})", True)
             else:
                 # Numeric operation
                 # Check if either operand is a pyint variable (needs getValue)
@@ -834,6 +1570,11 @@ class ZigCodeGenerator:
             # This returns a unique temp var name that caller must handle
             return (f"__list_literal_{id(node)}", True)
 
+        elif isinstance(node, ast.Tuple):
+            # Tuple literal -> PyTuple.create + setItem
+            # This returns a unique temp var name that caller must handle
+            return (f"__tuple_literal_{id(node)}", True)
+
         elif isinstance(node, ast.ListComp):
             # List comprehension -> create list + loop + append
             # Store comprehension info for later generation
@@ -851,19 +1592,20 @@ class ZigCodeGenerator:
 
             # Check if it's a slice operation
             if isinstance(node.slice, ast.Slice):
-                # Slicing: obj[start:end]
+                # Slicing: obj[start:end:step]
                 start_code = "null" if node.slice.lower is None else str(self.visit_expr(node.slice.lower)[0])
                 end_code = "null" if node.slice.upper is None else str(self.visit_expr(node.slice.upper)[0])
+                step_code = "null" if node.slice.step is None else str(self.visit_expr(node.slice.step)[0])
 
                 # Determine if this is list or string slicing based on var_types
                 if isinstance(node.value, ast.Name):
                     var_name = node.value.id
                     var_type = self.var_types.get(var_name)
                     if var_type == "string":
-                        return (f"runtime.PyString.slice({value_code}, allocator, {start_code}, {end_code})", True)
+                        return (f"runtime.PyString.slice({value_code}, allocator, {start_code}, {end_code}, {step_code})", True)
 
                 # Default to list slicing
-                return (f"runtime.PyList.slice({value_code}, allocator, {start_code}, {end_code})", True)
+                return (f"runtime.PyList.slice({value_code}, allocator, {start_code}, {end_code}, {step_code})", True)
 
             # Check if it's a dict access (string key) or list access (int index)
             elif isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
@@ -871,16 +1613,43 @@ class ZigCodeGenerator:
                 key_str = node.slice.value
                 return (f'runtime.PyDict.get({value_code}, "{key_str}").?', False)
             else:
-                # List access with integer index
+                # List/tuple access with integer index (can throw IndexError)
                 index_code, index_try = self.visit_expr(node.slice)
-                return (f"runtime.PyList.getItem({value_code}, @intCast({index_code}))", False)
+
+                # Check if it's a tuple or list access based on var_types
+                if isinstance(node.value, ast.Name):
+                    var_name = node.value.id
+                    var_type = self.var_types.get(var_name)
+                    if var_type == "tuple":
+                        return (f"runtime.PyTuple.getItem({value_code}, @intCast({index_code}))", True)
+
+                # Default to list access
+                return (f"runtime.PyList.getItem({value_code}, @intCast({index_code}))", True)
 
         elif isinstance(node, ast.Attribute):
             # Method/attribute access: obj.method or obj.attr
             value_code, value_try = self.visit_expr(node.value)
-            # For now, just return a marker that this is a method access
+
+            # Check if this is accessing an instance attribute
+            if isinstance(node.value, ast.Name):
+                var_name = node.value.id
+                var_type = self.var_types.get(var_name)
+
+                # If var_type is a class name, check if it's a field or method
+                if var_type in self.class_definitions:
+                    class_info = self.class_definitions[var_type]
+                    # If it's a method, return marker. If it's a field, return direct access
+                    if node.attr in class_info.methods:
+                        # Method access - return marker for Call handler
+                        return (f"__method__{value_code}__{node.attr}__{value_try}", False)
+                    else:
+                        # Direct field access: instance.field
+                        return (f"{value_code}.{node.attr}", False)
+
+            # For method calls or runtime type methods, return a marker
             # The Call handler will detect this and handle it specially
-            return (f"__method__{value_code}__{node.attr}", False)
+            # Include value_try flag in the marker for proper handling
+            return (f"__method__{value_code}__{node.attr}__{value_try}", False)
 
         elif isinstance(node, ast.Call):
             func_code, func_try = self.visit_expr(node.func)
@@ -892,13 +1661,44 @@ class ZigCodeGenerator:
                 parts = func_code.split("__")
                 obj_code = parts[2]
                 method_name = parts[3]
+                obj_needs_try = parts[4] == "True" if len(parts) > 4 else False
+
+                # If object needs try, wrap it
+                if obj_needs_try:
+                    obj_code = f"try {obj_code}"
 
                 # Get object type for disambiguation
                 obj_type = None
                 if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
                     obj_type = self.var_types.get(node.func.value.id)
 
-                # Look up method in registry
+                # Check if this is a class instance method call
+                if obj_type and obj_type in self.class_definitions:
+                    # This is an instance method call
+                    call_args = []
+
+                    # Check if method needs allocator
+                    class_info = self.class_definitions[obj_type]
+                    method_needs_allocator = False
+                    method_needs_try = False
+                    if method_name in class_info.methods:
+                        method_sig = class_info.methods[method_name]
+                        method_needs_allocator = method_sig.get("needs_allocator", False)
+                        method_needs_try = method_needs_allocator  # Methods with allocator need try
+
+                    if method_needs_allocator:
+                        call_args.append("allocator")
+
+                    for arg_code, arg_try in args:
+                        if arg_try:
+                            call_args.append(f"try {arg_code}")
+                        else:
+                            call_args.append(arg_code)
+
+                    args_str = ", ".join(call_args)
+                    return (f"{obj_code}.{method_name}({args_str})", method_needs_try)
+
+                # Look up method in registry (for runtime types like PyString, PyList, etc.)
                 method_info = get_method_info(method_name, obj_type)
                 if not method_info:
                     raise NotImplementedError(f"Method {method_name} not supported")
@@ -906,11 +1706,45 @@ class ZigCodeGenerator:
                 # Special handling for statement methods (like append, remove, extend, reverse, insert, clear)
                 if method_info.is_statement:
                     # Mark for special handling in visit_Expr
-                    marker_name = f"list_{method_name}"
+                    # Determine prefix based on runtime type
+                    if method_info.runtime_type == "PyDict":
+                        marker_name = f"dict_{method_name}"
+                    else:
+                        marker_name = f"list_{method_name}"
                     if args:
+                        # For list literals, generate them as temp variables first
+                        processed_args = []
+                        for i, (arg_code, arg_try) in enumerate(args):
+                            if arg_code.startswith("__list_literal_"):
+                                # Generate list literal as temp variable
+                                temp_list_var = f"_stmt_list_arg_{id(node)}_{i}"
+                                # Find the original AST node to get list elements
+                                list_node = node.args[i]
+                                if isinstance(list_node, ast.List):
+                                    self.emit(f"const {temp_list_var} = try runtime.PyList.create(allocator);")
+                                    self.emit(f"defer runtime.decref({temp_list_var}, allocator);")
+                                    for elem in list_node.elts:
+                                        elem_code, elem_try = self.visit_expr(elem)
+                                        if elem_try:
+                                            temp_elem = f"_tmp_elem_{id(elem)}"
+                                            self.emit(f"const {temp_elem} = try {elem_code};")
+                                            self.emit(f"try runtime.PyList.append({temp_list_var}, {temp_elem});")
+                                            self.emit(f"runtime.decref({temp_elem}, allocator);")
+                                        else:
+                                            temp_elem = f"_tmp_elem_{id(elem)}"
+                                            self.emit(f"const {temp_elem} = try runtime.PyInt.create(allocator, {elem_code});")
+                                            self.emit(f"try runtime.PyList.append({temp_list_var}, {temp_elem});")
+                                            self.emit(f"runtime.decref({temp_elem}, allocator);")
+                                    processed_args.append((temp_list_var, False))
+                                else:
+                                    # Fallback if not a list node
+                                    processed_args.append((arg_code, arg_try))
+                            else:
+                                processed_args.append((arg_code, arg_try))
+
                         # Encode all arguments in the marker
                         arg_parts = []
-                        for arg_code, arg_try in args:
+                        for arg_code, arg_try in processed_args:
                             arg_parts.append(f"{arg_code}|||{arg_try}")
                         args_encoded = ";;;".join(arg_parts)
                         return (f"__{marker_name}__{obj_code}__{args_encoded}", True)
@@ -931,9 +1765,26 @@ class ZigCodeGenerator:
                         # Check if it's a subscript (returns PyObject*)
                         if isinstance(node.args[0], ast.Subscript):
                             # Subscript returns PyObject* - need to extract value
+                            wrapped_arg = f"try {arg_code}" if arg_needs_try else arg_code
+
                             # Check if it's a dict with string key or list with int index
                             subscript_node = node.args[0]
-                            if isinstance(subscript_node.slice, ast.Constant) and isinstance(subscript_node.slice.value, str):
+
+                            # Check if it's a slice operation
+                            if isinstance(subscript_node.slice, ast.Slice):
+                                # Slicing returns a list or string
+                                if isinstance(subscript_node.value, ast.Name):
+                                    container_var = subscript_node.value.id
+                                    var_type = self.var_types.get(container_var)
+                                    if var_type == "string":
+                                        # String slice - print as string
+                                        return (f'std.debug.print("{{s}}\\n", .{{runtime.PyString.getValue({wrapped_arg})}})', False)
+                                    else:
+                                        # List slice - print as list
+                                        return (f'runtime.printList({wrapped_arg}); std.debug.print("\\n", .{{}})', False)
+                                # Default to list printing
+                                return (f'runtime.printList({wrapped_arg}); std.debug.print("\\n", .{{}})', False)
+                            elif isinstance(subscript_node.slice, ast.Constant) and isinstance(subscript_node.slice.value, str):
                                 # Dict access - value could be string or int
                                 # We need to check the dict variable to determine value type
                                 # For now, try to determine from the dict definition
@@ -942,12 +1793,37 @@ class ZigCodeGenerator:
                                 key = subscript_node.slice.value
                                 # Heuristic: keys like "name", "title" are strings, others are ints
                                 if key in ["name", "title", "text", "message"]:
-                                    return (f'std.debug.print("{{s}}\\n", .{{runtime.PyString.getValue({arg_code})}})', False)
+                                    return (f'std.debug.print("{{s}}\\n", .{{runtime.PyString.getValue({wrapped_arg})}})', False)
                                 else:
-                                    return (f'std.debug.print("{{}}\\n", .{{runtime.PyInt.getValue({arg_code})}})', False)
+                                    return (f'std.debug.print("{{}}\\n", .{{runtime.PyInt.getValue({wrapped_arg})}})', False)
                             else:
-                                # List access - assume PyInt
-                                return (f'std.debug.print("{{}}\\n", .{{runtime.PyInt.getValue({arg_code})}})', False)
+                                # List/tuple access - check element type
+                                if isinstance(subscript_node.value, ast.Name):
+                                    container_var = subscript_node.value.id
+                                    elem_type = self.list_element_types.get(container_var) or self.tuple_element_types.get(container_var)
+                                    if elem_type == "string":
+                                        return (f'std.debug.print("{{s}}\\n", .{{runtime.PyString.getValue({wrapped_arg})}})', False)
+                                    elif elem_type == "int":
+                                        return (f'std.debug.print("{{}}\\n", .{{runtime.PyInt.getValue({wrapped_arg})}})', False)
+                                # Default: use runtime type checking
+                                return (f'runtime.printPyObject({wrapped_arg}); std.debug.print("\\n", .{{}})', False)
+                        # Check for instance attribute access (e.g., dog.name)
+                        elif isinstance(node.args[0], ast.Attribute) and isinstance(node.args[0].value, ast.Name):
+                            obj_name = node.args[0].value.id
+                            field_name = node.args[0].attr
+                            obj_type = self.var_types.get(obj_name)
+
+                            # If it's a class instance, check field type
+                            if obj_type and obj_type in self.class_definitions:
+                                class_info = self.class_definitions[obj_type]
+                                field_type = class_info.fields.get(field_name)
+                                # PyObject fields (string, list, dict)
+                                if field_type == "*runtime.PyObject":
+                                    return (f'std.debug.print("{{s}}\\n", .{{runtime.PyString.getValue({arg_code})}})', False)
+                                elif field_type == "int":
+                                    return (f'std.debug.print("{{}}\\n", .{{{arg_code}}})', False)
+                            # Default fallback
+                            return (f'std.debug.print("{{}}\\n", .{{{arg_code}}})', False)
                         # In runtime mode, check variable type
                         elif isinstance(node.args[0], ast.Name):
                             arg_name = node.args[0].id
@@ -959,10 +1835,10 @@ class ZigCodeGenerator:
                                 return (f'std.debug.print("{{}}\\n", .{{{arg_name}}})', False)
                             else:
                                 # Default to string
-                                return (f'std.debug.print("{{s}}\\n", .{{PyString.getValue({arg_name})}})', False)
+                                return (f'std.debug.print("{{s}}\\n", .{{runtime.PyString.getValue({arg_name})}})', False)
                         elif arg_needs_try:
                             # Expression that creates PyObject
-                            return (f'std.debug.print("{{s}}\\n", .{{PyString.getValue(try {arg_code})}})', False)
+                            return (f'std.debug.print("{{s}}\\n", .{{runtime.PyString.getValue(try {arg_code})}})', False)
                     # Primitive types (int, float, etc)
                     return (f'std.debug.print("{{}}\\n", .{{{arg_code}}})', False)
                 return (f'std.debug.print("\\n", .{{}})', False)
@@ -970,6 +1846,11 @@ class ZigCodeGenerator:
             # Special handling for len()
             if func_code == "len" and args:
                 arg_code, arg_try = args[0]
+
+                # If the argument is an expression that returns error union, unwrap it
+                if arg_try:
+                    arg_code = f"try {arg_code}"
+
                 # Check variable type to determine PyList.len or PyDict.len
                 if isinstance(node.args[0], ast.Name):
                     arg_name = node.args[0].id
@@ -978,9 +1859,59 @@ class ZigCodeGenerator:
                         return (f"runtime.PyDict.len({arg_code})", False)
                 return (f"runtime.PyList.len({arg_code})", False)
 
-            # Regular function call
+            # Check if this is a class instantiation
+            if func_code in self.class_definitions:
+                class_name = func_code
+                call_args = ["allocator"]
+
+                # Add constructor arguments
+                for arg_code, arg_try in args:
+                    if arg_try:
+                        call_args.append(f"try {arg_code}")
+                    else:
+                        call_args.append(arg_code)
+
+                args_str = ", ".join(call_args)
+                return (f"{class_name}.init({args_str})", True)
+
+            # Check if this is a user-defined function
+            if func_code in self.function_signatures:
+                sig = self.function_signatures[func_code]
+                call_args = []
+
+                # Add allocator if function needs it
+                if sig["needs_allocator"]:
+                    call_args.append("allocator")
+
+                # Add user arguments, wrapping with try if needed
+                for arg_code, arg_try in args:
+                    if arg_try:
+                        call_args.append(f"try {arg_code}")
+                    else:
+                        call_args.append(arg_code)
+
+                args_str = ", ".join(call_args)
+                needs_try = "!" in sig["return_type"]
+                return (f"{func_code}({args_str})", needs_try)
+
+            # Regular function call (built-ins like range, len, etc.)
             args_str = ", ".join(arg[0] for arg in args)
             return (f"{func_code}({args_str})", False)
+
+        elif isinstance(node, ast.UnaryOp):
+            # Unary operations: -x, +x, not x
+            operand_code, operand_try = self.visit_expr(node.operand)
+            if isinstance(node.op, ast.USub):
+                # Unary minus: -x
+                return (f"-{operand_code}", operand_try)
+            elif isinstance(node.op, ast.UAdd):
+                # Unary plus: +x
+                return (f"+{operand_code}", operand_try)
+            elif isinstance(node.op, ast.Not):
+                # Not: not x
+                return (f"!{operand_code}", operand_try)
+            else:
+                raise NotImplementedError(f"Unary operator not implemented: {node.op.__class__.__name__}")
 
         else:
             raise NotImplementedError(
@@ -1011,9 +1942,11 @@ class ZigCodeGenerator:
         return op_map.get(type(op), "+")
 
 
-def generate_code(parsed: ParsedModule) -> str:
+def generate_code(parsed: ParsedModule, imported_modules: Optional[Dict[str, 'ParsedModule']] = None) -> str:
     """Generate Zig code from parsed module"""
     generator = ZigCodeGenerator()
+    # Note: imported_modules parameter kept for backwards compatibility with compiler.py
+    # but not used in current implementation
     return generator.generate(parsed)
 
 
