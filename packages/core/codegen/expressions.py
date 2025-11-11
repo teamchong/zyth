@@ -352,6 +352,61 @@ class ExpressionVisitor:
                 arg_code, _ = self.visit_expr(node.args[0])
                 return (f"@round({arg_code})", False)
 
+            elif func_name == "int":
+                arg_code, arg_try = self.visit_expr(node.args[0])
+                arg_type = None
+                if isinstance(node.args[0], ast.Name):
+                    arg_type = self.var_types.get(node.args[0].id)
+                elif isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+                    # String literal
+                    arg_type = "string"
+
+                if arg_type == "string" or arg_try:
+                    # Convert string to int (handles both variables and literals)
+                    arg_expr = f"try {arg_code}" if arg_try else arg_code
+                    return (f"try runtime.PyString.toInt({arg_expr})", False)
+                elif arg_type == "pyint":
+                    # Already PyInt, return as-is
+                    return (arg_code, False)
+                else:
+                    # Assume it's already an i64
+                    return (arg_code, False)
+
+            elif func_name == "str":
+                arg_code, arg_try = self.visit_expr(node.args[0])
+                arg_type = None
+                if isinstance(node.args[0], ast.Name):
+                    arg_type = self.var_types.get(node.args[0].id)
+
+                if arg_type == "string":
+                    # Already string
+                    return (arg_code, False)
+                elif arg_type == "pyint":
+                    # Convert PyInt to string
+                    return (f"runtime.PyInt.toString(allocator, {arg_code})", True)
+                else:
+                    # Convert i64 to string
+                    return (f"runtime.intToString(allocator, {arg_code})", True)
+
+            elif func_name == "bool":
+                arg_code, arg_try = self.visit_expr(node.args[0])
+                arg_type = None
+                if isinstance(node.args[0], ast.Name):
+                    arg_type = self.var_types.get(node.args[0].id)
+                elif isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+                    # String literal
+                    arg_type = "string"
+
+                # For now, simple truthiness check
+                if arg_type == "string":
+                    arg_expr = f"try {arg_code}" if arg_try else arg_code
+                    return (f"runtime.PyString.len({arg_expr}) > 0", False)
+                elif arg_type == "list":
+                    arg_expr = f"try {arg_code}" if arg_try else arg_code
+                    return (f"runtime.PyList.len({arg_expr}) > 0", False)
+                else:
+                    return (f"{arg_code} != 0", False)
+
             elif func_name == "range":
                 if len(node.args) == 1:
                     end_code, _ = self.visit_expr(node.args[0])

@@ -449,7 +449,9 @@ pub const PyString = struct {
             }
         }
 
-        return try create(allocator, result);
+        const result_obj = try create(allocator, result);
+        allocator.free(result); // Free temporary buffer after PyString duplicates it
+        return result_obj;
     }
 
     pub fn isdigit(obj: *PyObject) bool {
@@ -562,5 +564,10 @@ pub const PyString = struct {
         @memset(result[left_padding + data.data.len..], ' ');
 
         return try create(allocator, result);
+    }
+
+    pub fn toInt(obj: *PyObject) !i64 {
+        const str_val = getValue(obj);
+        return std.fmt.parseInt(i64, str_val, 10);
     }
 };

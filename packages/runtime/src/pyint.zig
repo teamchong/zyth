@@ -26,4 +26,11 @@ pub const PyInt = struct {
         const data: *PyInt = @ptrCast(@alignCast(obj.data));
         return data.value;
     }
+
+    pub fn toString(allocator: std.mem.Allocator, obj: *PyObject) !*PyObject {
+        const runtime = @import("runtime.zig");
+        const val = getValue(obj);
+        const str = try std.fmt.allocPrint(allocator, "{}", .{val});
+        return try runtime.PyString.create(allocator, str);
+    }
 };

@@ -153,6 +153,12 @@ pub fn moduloInt(a: i64, b: i64) PythonError!i64 {
     return @mod(a, b);
 }
 
+/// Convert primitive i64 to PyString
+pub fn intToString(allocator: std.mem.Allocator, value: i64) !*PyObject {
+    const str = try std.fmt.allocPrint(allocator, "{}", .{value});
+    return try PyString.create(allocator, str);
+}
+
 /// Python list type - re-exported from pylist.zig
 pub const PyList = pylist.PyList;
 
