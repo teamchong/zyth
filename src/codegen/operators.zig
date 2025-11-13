@@ -175,30 +175,52 @@ pub fn visitCompare(self: *ZigCodeGenerator, compare: ast.Node.Compare) CodegenE
     if (op == .In or op == .NotIn) {
         self.needs_runtime = true;
 
-        // Wrap left operand if it's a primitive constant
-        var left_code = left_result.code;
+        // For primitive constants, wrap in PyObjects with proper cleanup using block expressions
+        const left_code = left_result.code;
+        var needs_temp_var = false;
+        var create_call: []const u8 = undefined;
+
         if (compare.left.* == .constant) {
             const constant = compare.left.*.constant;
             switch (constant.value) {
                 .int => {
-                    left_code = try std.fmt.allocPrint(self.allocator, "try runtime.PyInt.create(allocator, {s})", .{left_result.code});
+                    // Int constants are raw values like "3"
+                    create_call = try std.fmt.allocPrint(self.allocator, "runtime.PyInt.create(allocator, {s})", .{left_code});
+                    needs_temp_var = true;
                 },
                 .string => {
-                    // Strings are already wrapped by visitConstant
+                    // String constants already return full create call
+                    create_call = left_code;
+                    needs_temp_var = true;
                 },
                 .bool => {
-                    left_code = try std.fmt.allocPrint(self.allocator, "try runtime.PyBool.create(allocator, {s})", .{left_result.code});
+                    // Bool constants are raw values like "true"
+                    create_call = try std.fmt.allocPrint(self.allocator, "runtime.PyBool.create(allocator, {s})", .{left_code});
+                    needs_temp_var = true;
                 },
                 .float => {
-                    left_code = try std.fmt.allocPrint(self.allocator, "try runtime.PyFloat.create(allocator, {s})", .{left_result.code});
+                    // Float constants are raw values like "3.14"
+                    create_call = try std.fmt.allocPrint(self.allocator, "runtime.PyFloat.create(allocator, {s})", .{left_code});
+                    needs_temp_var = true;
                 },
             }
         }
 
-        if (op == .In) {
-            try buf.writer(self.allocator).print("runtime.contains({s}, {s})", .{ left_code, right_result.code });
+        // Use labeled block for scoped temp variable with defer
+        if (needs_temp_var) {
+            const temp_var_name = try std.fmt.allocPrint(self.allocator, "__contains_temp_{d}", .{self.temp_var_counter});
+            self.temp_var_counter += 1;
+
+            // Generate block expression: blk: { const temp = try <create_call>; defer decref; break :blk contains(...); }
+            const negation = if (op == .NotIn) "!" else "";
+            try buf.writer(self.allocator).print(
+                "blk: {{ const {s} = try {s}; defer runtime.decref({s}, allocator); break :blk {s}runtime.contains({s}, {s}); }}",
+                .{ temp_var_name, create_call, temp_var_name, negation, temp_var_name, right_result.code }
+            );
         } else {
-            try buf.writer(self.allocator).print("!runtime.contains({s}, {s})", .{ left_code, right_result.code });
+            // No temp needed - direct contains call
+            const negation = if (op == .NotIn) "!" else "";
+            try buf.writer(self.allocator).print("{s}runtime.contains({s}, {s})", .{ negation, left_code, right_result.code });
         }
     } else {
         const op_str = visitCompareOp(self, op);

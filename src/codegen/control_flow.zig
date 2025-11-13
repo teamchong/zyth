@@ -184,13 +184,26 @@ fn visitEnumerateFor(self: *ZigCodeGenerator, for_node: ast.Node.For, args: []as
 fn visitZipFor(self: *ZigCodeGenerator, for_node: ast.Node.For, args: []ast.Node) CodegenError!void {
     if (args.len < 2) return error.InvalidZipArgs;
 
-    // Get all iterable expressions
+    // Get all iterable expressions and create cast variables
     var iterables = std.ArrayList([]const u8){};
     defer iterables.deinit(self.allocator);
+
+    var list_data_vars = std.ArrayList([]const u8){};
+    defer list_data_vars.deinit(self.allocator);
 
     for (args) |arg| {
         const iterable_result = try expressions.visitExpr(self, arg);
         try iterables.append(self.allocator, iterable_result.code);
+
+        // Generate temporary variable to hold the casted list data
+        const list_data_var = try std.fmt.allocPrint(self.allocator, "__zip_list_{d}", .{self.temp_var_counter});
+        self.temp_var_counter += 1;
+        try list_data_vars.append(self.allocator, list_data_var);
+
+        // Cast PyObject to PyList to access items
+        var cast_buf = std.ArrayList(u8){};
+        try cast_buf.writer(self.allocator).print("const {s}: *runtime.PyList = @ptrCast(@alignCast({s}.data));", .{ list_data_var, iterable_result.code });
+        try self.emit(try cast_buf.toOwnedSlice(self.allocator));
     }
 
     // Extract target variables (should be tuple)
@@ -212,27 +225,36 @@ fn visitZipFor(self: *ZigCodeGenerator, for_node: ast.Node.For, args: []ast.Node
                 try self.declared_vars.put(var_name, {});
             }
 
-            // Generate: for (list1.list.items.items, list2.list.items.items, ...) |var1, var2, ...| {
-            var buf = std.ArrayList(u8){};
-            try buf.writer(self.allocator).writeAll("for (");
+            // Calculate minimum length across all lists (Python zip() behavior)
+            const min_len_var = try std.fmt.allocPrint(self.allocator, "__zip_min_len_{d}", .{self.temp_var_counter});
+            self.temp_var_counter += 1;
 
-            for (iterables.items, 0..) |iterable, i| {
-                if (i > 0) try buf.writer(self.allocator).writeAll(", ");
-                try buf.writer(self.allocator).print("{s}.list.items.items", .{iterable});
+            var min_len_buf = std.ArrayList(u8){};
+            try min_len_buf.writer(self.allocator).print("var {s} = {s}.items.items.len", .{ min_len_var, list_data_vars.items[0] });
+            for (list_data_vars.items[1..]) |list_var| {
+                try min_len_buf.writer(self.allocator).print("; {s} = @min({s}, {s}.items.items.len)", .{ min_len_var, min_len_var, list_var });
             }
+            try min_len_buf.writer(self.allocator).writeAll(";");
+            try self.emit(try min_len_buf.toOwnedSlice(self.allocator));
 
-            try buf.writer(self.allocator).writeAll(") |");
+            // Use index-based loop up to minimum length
+            const idx_var = try std.fmt.allocPrint(self.allocator, "__zip_idx_{d}", .{self.temp_var_counter});
+            self.temp_var_counter += 1;
 
-            for (var_names.items, 0..) |var_name, i| {
-                if (i > 0) try buf.writer(self.allocator).writeAll(", ");
-                try buf.writer(self.allocator).writeAll(var_name);
-            }
-
-            try buf.writer(self.allocator).writeAll("| {");
-            try self.emit(try buf.toOwnedSlice(self.allocator));
+            var loop_buf = std.ArrayList(u8){};
+            try loop_buf.writer(self.allocator).print("var {s}: usize = 0; while ({s} < {s}) : ({s} += 1) {{", .{ idx_var, idx_var, min_len_var, idx_var });
+            try self.emit(try loop_buf.toOwnedSlice(self.allocator));
 
             self.indent();
 
+            // Extract elements from each list
+            for (var_names.items, 0..) |var_name, i| {
+                var elem_buf = std.ArrayList(u8){};
+                try elem_buf.writer(self.allocator).print("const {s} = {s}.items.items[{s}];", .{ var_name, list_data_vars.items[i], idx_var });
+                try self.emit(try elem_buf.toOwnedSlice(self.allocator));
+            }
+
+            // Generate loop body
             for (for_node.body) |stmt| {
                 try statements.visitNode(self, stmt);
             }

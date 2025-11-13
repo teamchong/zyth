@@ -52,6 +52,7 @@ pub fn generate(allocator: std.mem.Allocator, tree: ast.Node) ![]const u8 {
 pub const ExprResult = struct {
     code: []const u8,
     needs_try: bool,
+    needs_decref: bool = false,
 };
 
 /// Zig code generator - ports Python ZigCodeGenerator class
@@ -185,7 +186,8 @@ pub const ZigCodeGenerator = struct {
         if (self.needs_allocator) {
             try self.emit("var gpa = std.heap.GeneralPurposeAllocator(.{}){};");
             try self.emit("defer _ = gpa.deinit();");
-            try self.emit("const allocator = gpa.allocator();");
+            try self.emit("var allocator = gpa.allocator();");
+            try self.emit("_ = &allocator; // Suppress unused warning when no runtime operations need it");
             try self.emit("");
         }
 

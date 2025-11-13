@@ -460,6 +460,7 @@ fn visitSubscript(self: *ZigCodeGenerator, sub: ast.Node.Subscript) CodegenError
             return ExprResult{
                 .code = try buf.toOwnedSlice(self.allocator),
                 .needs_try = true,
+                .needs_decref = true,
             };
         },
     }
