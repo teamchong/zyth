@@ -24,7 +24,11 @@ pub fn visitNode(self: *ZigCodeGenerator, node: ast.Node) CodegenError!void {
                 // Expression statement - emit it with semicolon
                 if (result.code.len > 0) {
                     var buf = std.ArrayList(u8){};
-                    try buf.writer(self.allocator).print("{s};", .{result.code});
+                    if (result.needs_try) {
+                        try buf.writer(self.allocator).print("try {s};", .{result.code});
+                    } else {
+                        try buf.writer(self.allocator).print("{s};", .{result.code});
+                    }
                     try self.emit(try buf.toOwnedSlice(self.allocator));
                 }
             }
@@ -170,14 +174,39 @@ fn visitAssign(self: *ZigCodeGenerator, assign: ast.Node.Assign) CodegenError!vo
 
                     // Add defer for strings and PyObjects
                     const var_type = self.var_types.get(var_name);
-                    if (var_type != null and (std.mem.eql(u8, var_type.?, "string") or std.mem.eql(u8, var_type.?, "pyobject"))) {
+                    if (var_type != null and (
+                        std.mem.eql(u8, var_type.?, "string") or
+                        std.mem.eql(u8, var_type.?, "pyobject") or
+                        std.mem.eql(u8, var_type.?, "list") or
+                        std.mem.eql(u8, var_type.?, "dict") or
+                        std.mem.eql(u8, var_type.?, "tuple")
+                    )) {
                         var defer_buf = std.ArrayList(u8){};
                         try defer_buf.writer(self.allocator).print("defer runtime.decref({s}, allocator);", .{var_name});
                         try self.emit(try defer_buf.toOwnedSlice(self.allocator));
                     }
                 } else {
-                    try buf.writer(self.allocator).print("{s} {s} = {s};", .{ var_keyword, var_name, value_result.code });
+                    // Add explicit type for 'var' declarations
+                    const var_type = self.var_types.get(var_name);
+                    const is_var = std.mem.eql(u8, var_keyword, "var");
+
+                    if (is_var and var_type != null and std.mem.eql(u8, var_type.?, "int")) {
+                        try buf.writer(self.allocator).print("{s} {s}: i64 = {s};", .{ var_keyword, var_name, value_result.code });
+                    } else {
+                        try buf.writer(self.allocator).print("{s} {s} = {s};", .{ var_keyword, var_name, value_result.code });
+                    }
                     try self.emit(try buf.toOwnedSlice(self.allocator));
+
+                    // Add defer for list/dict/tuple (which don't use needs_try)
+                    if (var_type != null and (
+                        std.mem.eql(u8, var_type.?, "list") or
+                        std.mem.eql(u8, var_type.?, "dict") or
+                        std.mem.eql(u8, var_type.?, "tuple")
+                    )) {
+                        var defer_buf = std.ArrayList(u8){};
+                        try defer_buf.writer(self.allocator).print("defer runtime.decref({s}, allocator);", .{var_name});
+                        try self.emit(try defer_buf.toOwnedSlice(self.allocator));
+                    }
                 }
             } else {
                 // Reassignment

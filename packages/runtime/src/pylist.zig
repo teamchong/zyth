@@ -47,7 +47,7 @@ pub const PyList = struct {
         std.debug.assert(obj.type_id == .list);
         const data: *PyList = @ptrCast(@alignCast(obj.data));
         try data.items.append(data.allocator, item);
-        incref(item);
+        // Note: Caller transfers ownership, no incref needed
     }
 
     pub fn pop(allocator: std.mem.Allocator, obj: *PyObject) PythonError!*PyObject {
@@ -299,7 +299,7 @@ pub const PyList = struct {
 
         const insert_idx: usize = @intCast(index_pos);
         try data.items.insert(data.allocator, insert_idx, value);
-        incref(value);
+        // Note: Caller transfers ownership, no incref needed
     }
 
     pub fn clear(allocator: std.mem.Allocator, obj: *PyObject) void {

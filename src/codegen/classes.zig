@@ -302,6 +302,31 @@ pub fn visitMethodCall(self: *ZigCodeGenerator, attr: ast.Node.Attribute, args: 
     } else if (std.mem.eql(u8, method_name, "values")) {
         try buf.writer(self.allocator).print("runtime.PyDict.values(allocator, {s})", .{obj_result.code});
         return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = true };
+    } else if (std.mem.eql(u8, method_name, "get")) {
+        if (args.len < 1 or args.len > 2) return error.InvalidArguments;
+        const key_result = try expressions.visitExpr(self,args[0]);
+        const key_code = if (key_result.needs_try)
+            try std.fmt.allocPrint(self.allocator, "try {s}", .{key_result.code})
+        else
+            key_result.code;
+        const default_result = if (args.len == 2)
+            try expressions.visitExpr(self,args[1])
+        else
+            ExprResult{ .code = "runtime.PyNone", .needs_try = false };
+        const default_code = if (default_result.needs_try)
+            try std.fmt.allocPrint(self.allocator, "try {s}", .{default_result.code})
+        else
+            default_result.code;
+        try buf.writer(self.allocator).print("runtime.PyDict.get_method(allocator, {s}, {s}, {s})", .{ obj_result.code, key_code, default_code });
+        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = false };
+    } else if (std.mem.eql(u8, method_name, "items")) {
+        try buf.writer(self.allocator).print("runtime.PyDict.items(allocator, {s})", .{obj_result.code});
+        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = true };
+    } else if (std.mem.eql(u8, method_name, "update")) {
+        if (args.len != 1) return error.InvalidArguments;
+        const arg_result = try expressions.visitExpr(self,args[0]);
+        try buf.writer(self.allocator).print("runtime.PyDict.update({s}, {s})", .{ obj_result.code, arg_result.code });
+        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = true };
     } else {
         return error.UnsupportedMethod;
     }

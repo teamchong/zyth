@@ -361,6 +361,34 @@ pub const ZigCodeGenerator = struct {
                     }
                 }
             },
+            .if_stmt => |if_node| {
+                // Traverse if body
+                for (if_node.body) |stmt| {
+                    try self.detectReassignments(stmt, assignments_seen);
+                }
+                // Traverse else body
+                for (if_node.else_body) |stmt| {
+                    try self.detectReassignments(stmt, assignments_seen);
+                }
+            },
+            .while_stmt => |while_node| {
+                // Traverse while body
+                for (while_node.body) |stmt| {
+                    try self.detectReassignments(stmt, assignments_seen);
+                }
+            },
+            .for_stmt => |for_node| {
+                // Traverse for body
+                for (for_node.body) |stmt| {
+                    try self.detectReassignments(stmt, assignments_seen);
+                }
+            },
+            .function_def => |func| {
+                // Traverse function body
+                for (func.body) |stmt| {
+                    try self.detectReassignments(stmt, assignments_seen);
+                }
+            },
             else => {},
         }
     }

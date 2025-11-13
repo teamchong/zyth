@@ -48,7 +48,7 @@ pub const PyTuple = struct {
         const data: *PyTuple = @ptrCast(@alignCast(obj.data));
         std.debug.assert(idx < data.items.len);
         data.items[idx] = item;
-        incref(item);
+        // Note: Caller transfers ownership, no incref needed
     }
 
     pub fn getItem(obj: *PyObject, idx: usize) PythonError!*PyObject {

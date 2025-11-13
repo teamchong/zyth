@@ -24,7 +24,7 @@ pub const PyDict = struct {
         std.debug.assert(obj.type_id == .dict);
         const data: *PyDict = @ptrCast(@alignCast(obj.data));
         try data.map.put(key, value);
-        runtime.incref(value);
+        // Note: Caller transfers ownership, no incref needed
     }
 
     pub fn get(obj: *runtime.PyObject, key: []const u8) ?*runtime.PyObject {
@@ -57,7 +57,7 @@ pub const PyDict = struct {
         while (iterator.next()) |key| {
             const key_obj = try runtime.PyString.create(allocator, key.*);
             try runtime.PyList.append(result, key_obj);
-            runtime.decref(key_obj, allocator); // Append increfs, so decref our reference
+            // Note: Ownership transferred to list, no decref needed
         }
 
         return result;
@@ -70,9 +70,10 @@ pub const PyDict = struct {
         // Create list to hold values
         const result = try runtime.PyList.create(allocator);
 
-        // Add all values
+        // Add all values (incref since we're sharing between containers)
         var iterator = data.map.valueIterator();
         while (iterator.next()) |value| {
+            runtime.incref(value.*);
             try runtime.PyList.append(result, value.*);
         }
 
@@ -150,10 +151,11 @@ pub const PyDict = struct {
             const pair = try runtime.PyTuple.create(allocator, 2);
             const key_obj = try runtime.PyString.create(allocator, entry.key_ptr.*);
             runtime.PyTuple.setItem(pair, 0, key_obj);
-            runtime.decref(key_obj, allocator); // setItem increfs, so decref our reference
+            // Note: Ownership transferred to tuple, no decref needed
+            runtime.incref(entry.value_ptr.*); // Incref value since we're sharing it
             runtime.PyTuple.setItem(pair, 1, entry.value_ptr.*);
             try runtime.PyList.append(result, pair);
-            runtime.decref(pair, allocator); // append increfs, so decref our reference
+            // Note: Ownership transferred to list, no decref needed
         }
 
         return result;
