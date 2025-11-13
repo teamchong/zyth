@@ -141,7 +141,6 @@ pub fn printList(obj: *PyObject) void {
 pub const PyInt = pyint.PyInt;
 
 /// Helper functions for operations that can raise exceptions
-
 /// Integer division with zero check
 pub fn divideInt(a: i64, b: i64) PythonError!i64 {
     if (b == 0) {
@@ -328,6 +327,89 @@ pub fn any(iterable: *PyObject) bool {
     return false;
 }
 
+/// Absolute value of a number
+pub fn abs(value: i64) i64 {
+    if (value < 0) {
+        return -value;
+    }
+    return value;
+}
+
+/// Minimum value from a list
+pub fn minList(iterable: *PyObject) i64 {
+    std.debug.assert(iterable.type_id == .list);
+    const list: *PyList = @ptrCast(@alignCast(iterable.data));
+    std.debug.assert(list.items.items.len > 0);
+
+    var min_val: i64 = std.math.maxInt(i64);
+    for (list.items.items) |item| {
+        if (item.type_id == .int) {
+            const int_obj: *PyInt = @ptrCast(@alignCast(item.data));
+            if (int_obj.value < min_val) {
+                min_val = int_obj.value;
+            }
+        }
+    }
+    return min_val;
+}
+
+/// Minimum value from varargs
+pub fn minVarArgs(values: []const i64) i64 {
+    std.debug.assert(values.len > 0);
+    var min_val = values[0];
+    for (values[1..]) |value| {
+        if (value < min_val) {
+            min_val = value;
+        }
+    }
+    return min_val;
+}
+
+/// Maximum value from a list
+pub fn maxList(iterable: *PyObject) i64 {
+    std.debug.assert(iterable.type_id == .list);
+    const list: *PyList = @ptrCast(@alignCast(iterable.data));
+    std.debug.assert(list.items.items.len > 0);
+
+    var max_val: i64 = std.math.minInt(i64);
+    for (list.items.items) |item| {
+        if (item.type_id == .int) {
+            const int_obj: *PyInt = @ptrCast(@alignCast(item.data));
+            if (int_obj.value > max_val) {
+                max_val = int_obj.value;
+            }
+        }
+    }
+    return max_val;
+}
+
+/// Maximum value from varargs
+pub fn maxVarArgs(values: []const i64) i64 {
+    std.debug.assert(values.len > 0);
+    var max_val = values[0];
+    for (values[1..]) |value| {
+        if (value > max_val) {
+            max_val = value;
+        }
+    }
+    return max_val;
+}
+
+/// Sum of all numeric values in a list
+pub fn sum(iterable: *PyObject) i64 {
+    std.debug.assert(iterable.type_id == .list);
+    const list: *PyList = @ptrCast(@alignCast(iterable.data));
+
+    var total: i64 = 0;
+    for (list.items.items) |item| {
+        if (item.type_id == .int) {
+            const int_obj: *PyInt = @ptrCast(@alignCast(item.data));
+            total += int_obj.value;
+        }
+    }
+    return total;
+}
+
 /// Return a new sorted list from an iterable
 pub fn sorted(iterable: *PyObject, allocator: std.mem.Allocator) !*PyObject {
     std.debug.assert(iterable.type_id == .list);
@@ -408,11 +490,9 @@ pub const PyTuple = pytuple.PyTuple;
 /// Python string type - re-exported from pystring.zig
 pub const PyString = pystring.PyString;
 
-
 // Import PyDict from separate file
 const dict_module = @import("dict.zig");
 pub const PyDict = dict_module.PyDict;
-
 
 // Tests
 test "PyInt creation and retrieval" {

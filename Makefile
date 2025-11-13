@@ -1,4 +1,4 @@
-.PHONY: help build install verify test test-zig lint format typecheck clean run benchmark
+.PHONY: help build install verify test test-zig format-zig lint-zig clean run benchmark
 
 help:
 	@echo "Zyth Commands"
@@ -7,8 +7,10 @@ help:
 	@echo "build          - Build debug binary for development"
 	@echo "build-release  - Build optimized production binary"
 	@echo "verify         - Verify installation is working"
-	@echo "test           - Run Python tests (legacy)"
+	@echo "test           - Run pytest regression tests"
 	@echo "test-zig       - Run Zig runtime tests"
+	@echo "format-zig     - Format Zig code"
+	@echo "lint-zig       - Check Zig code formatting"
 	@echo "clean          - Remove build artifacts"
 
 build:
@@ -41,20 +43,26 @@ verify:
 	@bash scripts/verify-install.sh
 
 test:
-	uv run pytest packages/*/tests -v
+	@echo "🧪 Running regression tests..."
+	pytest tests/test_regression.py -v
+	@echo "✅ Tests complete"
 
 test-zig:
+	@echo "🧪 Running Zig runtime tests..."
 	zig test packages/runtime/src/runtime.zig
 	@echo "✅ Zig runtime tests passed"
 
-lint:
-	uv run ruff check packages/
+format-zig:
+	@echo "🎨 Formatting Zig code..."
+	@zig fmt src/*.zig
+	@zig fmt packages/runtime/src/*.zig
+	@echo "✅ Zig code formatted"
 
-format:
-	uv run ruff format packages/
-
-typecheck:
-	uv run mypy packages/
+lint-zig:
+	@echo "🔍 Checking Zig formatting..."
+	@zig fmt --check src/*.zig
+	@zig fmt --check packages/runtime/src/*.zig
+	@echo "✅ Zig formatting OK"
 
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true

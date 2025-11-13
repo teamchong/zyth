@@ -437,7 +437,7 @@ pub const Parser = struct {
     }
 
     fn parseComparison(self: *Parser) ParseError!ast.Node {
-        const left = try self.parseAddSub();
+        const left = try self.parseBitOr();
 
         // Check for comparison operators
         var ops = std.ArrayList(ast.CompareOp){};
@@ -474,7 +474,7 @@ pub const Parser = struct {
 
             if (!found) break;
 
-            const right = try self.parseAddSub();
+            const right = try self.parseBitOr();
             try comparators.append(self.allocator, right);
         }
 
@@ -487,6 +487,102 @@ pub const Parser = struct {
                     .left = left_ptr,
                     .ops = try ops.toOwnedSlice(self.allocator),
                     .comparators = try comparators.toOwnedSlice(self.allocator),
+                },
+            };
+        }
+
+        return left;
+    }
+
+    fn parseBitOr(self: *Parser) ParseError!ast.Node {
+        var left = try self.parseBitXor();
+
+        while (true) {
+            var op: ?ast.Operator = null;
+
+            if (self.match(.Pipe)) {
+                op = .BitOr;
+            }
+
+            if (op == null) break;
+
+            const right = try self.parseBitXor();
+
+            const left_ptr = try self.allocator.create(ast.Node);
+            left_ptr.* = left;
+
+            const right_ptr = try self.allocator.create(ast.Node);
+            right_ptr.* = right;
+
+            left = ast.Node{
+                .binop = .{
+                    .left = left_ptr,
+                    .op = op.?,
+                    .right = right_ptr,
+                },
+            };
+        }
+
+        return left;
+    }
+
+    fn parseBitXor(self: *Parser) ParseError!ast.Node {
+        var left = try self.parseBitAnd();
+
+        while (true) {
+            var op: ?ast.Operator = null;
+
+            if (self.match(.Caret)) {
+                op = .BitXor;
+            }
+
+            if (op == null) break;
+
+            const right = try self.parseBitAnd();
+
+            const left_ptr = try self.allocator.create(ast.Node);
+            left_ptr.* = left;
+
+            const right_ptr = try self.allocator.create(ast.Node);
+            right_ptr.* = right;
+
+            left = ast.Node{
+                .binop = .{
+                    .left = left_ptr,
+                    .op = op.?,
+                    .right = right_ptr,
+                },
+            };
+        }
+
+        return left;
+    }
+
+    fn parseBitAnd(self: *Parser) ParseError!ast.Node {
+        var left = try self.parseAddSub();
+
+        while (true) {
+            var op: ?ast.Operator = null;
+
+            if (self.match(.Ampersand)) {
+                op = .BitAnd;
+            }
+
+            if (op == null) break;
+
+            const right = try self.parseAddSub();
+
+            const left_ptr = try self.allocator.create(ast.Node);
+            left_ptr.* = left;
+
+            const right_ptr = try self.allocator.create(ast.Node);
+            right_ptr.* = right;
+
+            left = ast.Node{
+                .binop = .{
+                    .left = left_ptr,
+                    .op = op.?,
+                    .right = right_ptr,
                 },
             };
         }

@@ -119,6 +119,9 @@ pub const Operator = enum {
     FloorDiv,
     Mod,
     Pow,
+    BitAnd,
+    BitOr,
+    BitXor,
 };
 
 pub const CompareOp = enum {

@@ -138,7 +138,7 @@ pub const PyString = struct {
         // Search for substring
         var i: usize = 0;
         while (i <= haystack.len - needle.len) : (i += 1) {
-            if (std.mem.eql(u8, haystack[i..i + needle.len], needle)) {
+            if (std.mem.eql(u8, haystack[i .. i + needle.len], needle)) {
                 return true;
             }
         }
@@ -261,7 +261,7 @@ pub const PyString = struct {
         var start: usize = 0;
         var i: usize = 0;
         while (i <= str.len - sep.len) {
-            if (std.mem.eql(u8, str[i..i + sep.len], sep)) {
+            if (std.mem.eql(u8, str[i .. i + sep.len], sep)) {
                 // Found separator - add substring
                 const part = str[start..i];
                 const part_obj = try create(allocator, part);
@@ -317,7 +317,7 @@ pub const PyString = struct {
         var count: usize = 0;
         var i: usize = 0;
         while (i <= str.len - old_str.len) {
-            if (std.mem.eql(u8, str[i..i + old_str.len], old_str)) {
+            if (std.mem.eql(u8, str[i .. i + old_str.len], old_str)) {
                 count += 1;
                 i += old_str.len;
             } else {
@@ -338,9 +338,9 @@ pub const PyString = struct {
         var src_idx: usize = 0;
         var dst_idx: usize = 0;
         while (src_idx < str.len) {
-            if (src_idx <= str.len - old_str.len and std.mem.eql(u8, str[src_idx..src_idx + old_str.len], old_str)) {
+            if (src_idx <= str.len - old_str.len and std.mem.eql(u8, str[src_idx .. src_idx + old_str.len], old_str)) {
                 // Copy replacement
-                @memcpy(result[dst_idx..dst_idx + new_str.len], new_str);
+                @memcpy(result[dst_idx .. dst_idx + new_str.len], new_str);
                 src_idx += old_str.len;
                 dst_idx += new_str.len;
             } else {
@@ -379,7 +379,7 @@ pub const PyString = struct {
         const suf = suffix_data.data;
 
         if (suf.len > str.len) return false;
-        return std.mem.eql(u8, str[str.len - suf.len..], suf);
+        return std.mem.eql(u8, str[str.len - suf.len ..], suf);
     }
 
     pub fn find(obj: *PyObject, substring: *PyObject) i64 {
@@ -400,7 +400,7 @@ pub const PyString = struct {
         // Search for substring
         var i: usize = 0;
         while (i <= haystack.len - needle.len) : (i += 1) {
-            if (std.mem.eql(u8, haystack[i..i + needle.len], needle)) {
+            if (std.mem.eql(u8, haystack[i .. i + needle.len], needle)) {
                 return @intCast(i);
             }
         }
@@ -422,7 +422,7 @@ pub const PyString = struct {
         var count_val: i64 = 0;
         var i: usize = 0;
         while (i <= str.len - sub.len) {
-            if (std.mem.eql(u8, str[i..i + sub.len], sub)) {
+            if (std.mem.eql(u8, str[i .. i + sub.len], sub)) {
                 count_val += 1;
                 i += sub.len; // Move past this occurrence
             } else {
@@ -462,11 +462,11 @@ pub const PyString = struct {
         for (items, 0..) |item, i| {
             if (item.type_id == .string) {
                 const item_data: *PyString = @ptrCast(@alignCast(item.data));
-                @memcpy(result[pos..pos + item_data.data.len], item_data.data);
+                @memcpy(result[pos .. pos + item_data.data.len], item_data.data);
                 pos += item_data.data.len;
 
                 if (i < items.len - 1) {
-                    @memcpy(result[pos..pos + sep.len], sep);
+                    @memcpy(result[pos .. pos + sep.len], sep);
                     pos += sep.len;
                 }
             }
@@ -587,8 +587,8 @@ pub const PyString = struct {
         const result = try allocator.alloc(u8, w);
         defer allocator.free(result); // Free temporary buffer
         @memset(result[0..left_padding], ' ');
-        @memcpy(result[left_padding..left_padding + data.data.len], data.data);
-        @memset(result[left_padding + data.data.len..], ' ');
+        @memcpy(result[left_padding .. left_padding + data.data.len], data.data);
+        @memset(result[left_padding + data.data.len ..], ' ');
 
         return try create(allocator, result);
     }

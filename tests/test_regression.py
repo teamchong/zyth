@@ -45,7 +45,7 @@ def run_example(example_path: Path) -> tuple[str, str, int, int]:
 
         # Compile Zyth
         compile_result = subprocess.run(
-            ["uv", "run", "python", "-m", "core.compiler", str(example_path), str(zy_bin)],
+            ["zyth", "build", str(example_path), str(zy_bin)],
             capture_output=True,
             text=True,
             timeout=30,

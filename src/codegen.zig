@@ -53,6 +53,7 @@ pub const ZigCodeGenerator = struct {
     reassigned_vars: std.StringHashMap(void),
     list_element_types: std.StringHashMap([]const u8),
     tuple_element_types: std.StringHashMap([]const u8),
+    function_names: std.StringHashMap(void),
 
     needs_runtime: bool,
     needs_allocator: bool,
@@ -68,6 +69,7 @@ pub const ZigCodeGenerator = struct {
             .reassigned_vars = std.StringHashMap(void).init(allocator),
             .list_element_types = std.StringHashMap([]const u8).init(allocator),
             .tuple_element_types = std.StringHashMap([]const u8).init(allocator),
+            .function_names = std.StringHashMap(void).init(allocator),
             .needs_runtime = false,
             .needs_allocator = false,
         };
@@ -81,6 +83,7 @@ pub const ZigCodeGenerator = struct {
         self.reassigned_vars.deinit();
         self.list_element_types.deinit();
         self.tuple_element_types.deinit();
+        self.function_names.deinit();
         self.allocator.destroy(self);
     }
 
@@ -108,10 +111,15 @@ pub const ZigCodeGenerator = struct {
 
     /// Generate code from parsed AST
     pub fn generate(self: *ZigCodeGenerator, module: ast.Node.Module) CodegenError!void {
-        // Phase 1: Detect runtime needs and collect declarations
+        // Phase 1: Detect runtime needs, collect declarations, and collect function names
         for (module.body) |node| {
             try self.detectRuntimeNeeds(node);
             try self.collectDeclarations(node);
+
+            // Collect function names
+            if (node == .function_def) {
+                try self.function_names.put(node.function_def.name, {});
+            }
         }
 
         // Phase 2: Detect reassignments
@@ -125,13 +133,22 @@ pub const ZigCodeGenerator = struct {
         // Reset declared_vars for code generation
         self.declared_vars.clearRetainingCapacity();
 
-        // Phase 3: Generate code
+        // Phase 3: Generate imports
         try self.emit("const std = @import(\"std\");");
         if (self.needs_runtime) {
             try self.emit("const runtime = @import(\"runtime.zig\");");
         }
         try self.emit("");
 
+        // Phase 4: Generate function definitions (before main)
+        for (module.body) |node| {
+            if (node == .function_def) {
+                try self.visitFunctionDef(node.function_def);
+                try self.emit("");
+            }
+        }
+
+        // Phase 5: Generate main function
         try self.emit("pub fn main() !void {");
         self.indent();
 
@@ -142,8 +159,11 @@ pub const ZigCodeGenerator = struct {
             try self.emit("");
         }
 
+        // Only visit non-function nodes in main
         for (module.body) |node| {
-            try self.visitNode(node);
+            if (node != .function_def) {
+                try self.visitNode(node);
+            }
         }
 
         self.dedent();
@@ -162,6 +182,54 @@ pub const ZigCodeGenerator = struct {
             .list => {
                 self.needs_runtime = true;
                 self.needs_allocator = true;
+            },
+            .expr_stmt => |expr_stmt| {
+                try self.detectRuntimeNeedsExpr(expr_stmt.value.*);
+            },
+            .assign => |assign| {
+                try self.detectRuntimeNeedsExpr(assign.value.*);
+            },
+            else => {},
+        }
+    }
+
+    /// Detect if expression requires PyObject runtime
+    fn detectRuntimeNeedsExpr(self: *ZigCodeGenerator, node: ast.Node) CodegenError!void {
+        switch (node) {
+            .constant => |constant| {
+                if (constant.value == .string) {
+                    self.needs_runtime = true;
+                    self.needs_allocator = true;
+                }
+            },
+            .list => {
+                self.needs_runtime = true;
+                self.needs_allocator = true;
+            },
+            .call => |call| {
+                // Check if this is a runtime function call
+                // Note: abs, min, max work on primitives and don't need runtime
+                // len, sum, all, any work on PyObjects and need runtime
+                switch (call.func.*) {
+                    .name => |func_name| {
+                        if (std.mem.eql(u8, func_name.id, "sum") or
+                            std.mem.eql(u8, func_name.id, "all") or
+                            std.mem.eql(u8, func_name.id, "any") or
+                            std.mem.eql(u8, func_name.id, "len"))
+                        {
+                            self.needs_runtime = true;
+                        }
+                    },
+                    else => {},
+                }
+                // Recursively check arguments
+                for (call.args) |arg| {
+                    try self.detectRuntimeNeedsExpr(arg);
+                }
+            },
+            .binop => |binop| {
+                try self.detectRuntimeNeedsExpr(binop.left.*);
+                try self.detectRuntimeNeedsExpr(binop.right.*);
             },
             else => {},
         }
@@ -250,8 +318,11 @@ pub const ZigCodeGenerator = struct {
             .Mult => "*",
             .Div => "/",
             .Mod => "%",
-            .FloorDiv => "//",
-            .Pow => "**",
+            .FloorDiv => "//", // Handled specially in visitBinOp
+            .Pow => "**", // Handled specially in visitBinOp
+            .BitAnd => "&",
+            .BitOr => "|",
+            .BitXor => "^",
         };
     }
 
@@ -401,10 +472,24 @@ pub const ZigCodeGenerator = struct {
         const left_result = try self.visitExpr(binop.left.*);
         const right_result = try self.visitExpr(binop.right.*);
 
-        const op_str = self.visitBinOpHelper(binop.op);
-
         var buf = std.ArrayList(u8){};
-        try buf.writer(self.allocator).print("{s} {s} {s}", .{ left_result.code, op_str, right_result.code });
+
+        // Handle operators that need special Zig functions
+        switch (binop.op) {
+            .FloorDiv => {
+                // Floor division: use @divFloor builtin
+                try buf.writer(self.allocator).print("@divFloor({s}, {s})", .{ left_result.code, right_result.code });
+            },
+            .Pow => {
+                // Exponentiation: use std.math.pow
+                try buf.writer(self.allocator).print("std.math.pow(i64, {s}, {s})", .{ left_result.code, right_result.code });
+            },
+            else => {
+                // Standard operators that map directly to Zig operators
+                const op_str = self.visitBinOpHelper(binop.op);
+                try buf.writer(self.allocator).print("{s} {s} {s}", .{ left_result.code, op_str, right_result.code });
+            },
+        }
 
         return ExprResult{
             .code = try buf.toOwnedSlice(self.allocator),
@@ -439,13 +524,58 @@ pub const ZigCodeGenerator = struct {
                     return self.visitPrintCall(call.args);
                 } else if (std.mem.eql(u8, func_name.id, "len")) {
                     return self.visitLenCall(call.args);
+                } else if (std.mem.eql(u8, func_name.id, "abs")) {
+                    return self.visitAbsCall(call.args);
+                } else if (std.mem.eql(u8, func_name.id, "min")) {
+                    return self.visitMinCall(call.args);
+                } else if (std.mem.eql(u8, func_name.id, "max")) {
+                    return self.visitMaxCall(call.args);
+                } else if (std.mem.eql(u8, func_name.id, "sum")) {
+                    return self.visitSumCall(call.args);
+                } else if (std.mem.eql(u8, func_name.id, "all")) {
+                    return self.visitAllCall(call.args);
+                } else if (std.mem.eql(u8, func_name.id, "any")) {
+                    return self.visitAnyCall(call.args);
                 } else {
-                    // User-defined function call
+                    // Check if this is a user-defined function
+                    if (self.function_names.contains(func_name.id)) {
+                        return self.visitUserFunctionCall(func_name.id, call.args);
+                    }
                     return error.UnsupportedFunction;
                 }
             },
             else => return error.UnsupportedCall,
         }
+    }
+
+    fn visitUserFunctionCall(self: *ZigCodeGenerator, func_name: []const u8, args: []ast.Node) CodegenError!ExprResult {
+        var buf = std.ArrayList(u8){};
+
+        // Generate function call: func_name(arg1, arg2, ...)
+        try buf.writer(self.allocator).print("{s}(", .{func_name});
+
+        // Add arguments
+        for (args, 0..) |arg, i| {
+            if (i > 0) {
+                try buf.writer(self.allocator).writeAll(", ");
+            }
+            const arg_result = try self.visitExpr(arg);
+            try buf.writer(self.allocator).writeAll(arg_result.code);
+        }
+
+        // Add allocator if needed
+        if (self.needs_allocator and args.len > 0) {
+            try buf.writer(self.allocator).writeAll(", allocator");
+        } else if (self.needs_allocator) {
+            try buf.writer(self.allocator).writeAll("allocator");
+        }
+
+        try buf.writer(self.allocator).writeAll(")");
+
+        return ExprResult{
+            .code = try buf.toOwnedSlice(self.allocator),
+            .needs_try = false,
+        };
     }
 
     fn visitPrintCall(self: *ZigCodeGenerator, args: []ast.Node) CodegenError!ExprResult {
@@ -514,6 +644,130 @@ pub const ZigCodeGenerator = struct {
                 try buf.writer(self.allocator).print("runtime.PyList.len({s})", .{arg_result.code});
             },
         }
+
+        return ExprResult{
+            .code = try buf.toOwnedSlice(self.allocator),
+            .needs_try = false,
+        };
+    }
+
+    fn visitAbsCall(self: *ZigCodeGenerator, args: []ast.Node) CodegenError!ExprResult {
+        if (args.len == 0) return error.MissingLenArg;
+
+        const arg = args[0];
+        const arg_result = try self.visitExpr(arg);
+
+        var buf = std.ArrayList(u8){};
+        try buf.writer(self.allocator).print("@abs({s})", .{arg_result.code});
+
+        return ExprResult{
+            .code = try buf.toOwnedSlice(self.allocator),
+            .needs_try = false,
+        };
+    }
+
+    fn visitMinCall(self: *ZigCodeGenerator, args: []ast.Node) CodegenError!ExprResult {
+        if (args.len == 0) return error.MissingLenArg;
+
+        var buf = std.ArrayList(u8){};
+
+        if (args.len == 1) {
+            // min([1, 2, 3]) - list argument - needs runtime
+            const arg_result = try self.visitExpr(args[0]);
+            try buf.writer(self.allocator).print("runtime.minList({s})", .{arg_result.code});
+        } else if (args.len == 2) {
+            // min(a, b) - use @min builtin
+            const arg1 = try self.visitExpr(args[0]);
+            const arg2 = try self.visitExpr(args[1]);
+            try buf.writer(self.allocator).print("@min({s}, {s})", .{ arg1.code, arg2.code });
+        } else {
+            // min(a, b, c, ...) - chain @min calls
+            var result_code = try self.visitExpr(args[0]);
+            for (args[1..]) |arg| {
+                const arg_result = try self.visitExpr(arg);
+                var temp_buf = std.ArrayList(u8){};
+                try temp_buf.writer(self.allocator).print("@min({s}, {s})", .{ result_code.code, arg_result.code });
+                result_code.code = try temp_buf.toOwnedSlice(self.allocator);
+            }
+            return result_code;
+        }
+
+        return ExprResult{
+            .code = try buf.toOwnedSlice(self.allocator),
+            .needs_try = false,
+        };
+    }
+
+    fn visitMaxCall(self: *ZigCodeGenerator, args: []ast.Node) CodegenError!ExprResult {
+        if (args.len == 0) return error.MissingLenArg;
+
+        var buf = std.ArrayList(u8){};
+
+        if (args.len == 1) {
+            // max([1, 2, 3]) - list argument - needs runtime
+            const arg_result = try self.visitExpr(args[0]);
+            try buf.writer(self.allocator).print("runtime.maxList({s})", .{arg_result.code});
+        } else if (args.len == 2) {
+            // max(a, b) - use @max builtin
+            const arg1 = try self.visitExpr(args[0]);
+            const arg2 = try self.visitExpr(args[1]);
+            try buf.writer(self.allocator).print("@max({s}, {s})", .{ arg1.code, arg2.code });
+        } else {
+            // max(a, b, c, ...) - chain @max calls
+            var result_code = try self.visitExpr(args[0]);
+            for (args[1..]) |arg| {
+                const arg_result = try self.visitExpr(arg);
+                var temp_buf = std.ArrayList(u8){};
+                try temp_buf.writer(self.allocator).print("@max({s}, {s})", .{ result_code.code, arg_result.code });
+                result_code.code = try temp_buf.toOwnedSlice(self.allocator);
+            }
+            return result_code;
+        }
+
+        return ExprResult{
+            .code = try buf.toOwnedSlice(self.allocator),
+            .needs_try = false,
+        };
+    }
+
+    fn visitSumCall(self: *ZigCodeGenerator, args: []ast.Node) CodegenError!ExprResult {
+        if (args.len == 0) return error.MissingLenArg;
+
+        const arg = args[0];
+        const arg_result = try self.visitExpr(arg);
+
+        var buf = std.ArrayList(u8){};
+        try buf.writer(self.allocator).print("runtime.sum({s})", .{arg_result.code});
+
+        return ExprResult{
+            .code = try buf.toOwnedSlice(self.allocator),
+            .needs_try = false,
+        };
+    }
+
+    fn visitAllCall(self: *ZigCodeGenerator, args: []ast.Node) CodegenError!ExprResult {
+        if (args.len == 0) return error.MissingLenArg;
+
+        const arg = args[0];
+        const arg_result = try self.visitExpr(arg);
+
+        var buf = std.ArrayList(u8){};
+        try buf.writer(self.allocator).print("runtime.all({s})", .{arg_result.code});
+
+        return ExprResult{
+            .code = try buf.toOwnedSlice(self.allocator),
+            .needs_try = false,
+        };
+    }
+
+    fn visitAnyCall(self: *ZigCodeGenerator, args: []ast.Node) CodegenError!ExprResult {
+        if (args.len == 0) return error.MissingLenArg;
+
+        const arg = args[0];
+        const arg_result = try self.visitExpr(arg);
+
+        var buf = std.ArrayList(u8){};
+        try buf.writer(self.allocator).print("runtime.any({s})", .{arg_result.code});
 
         return ExprResult{
             .code = try buf.toOwnedSlice(self.allocator),
@@ -653,15 +907,43 @@ pub const ZigCodeGenerator = struct {
     }
 
     fn visitFunctionDef(self: *ZigCodeGenerator, func: ast.Node.FunctionDef) CodegenError!void {
-        _ = self;
-        _ = func;
-        // TODO: Implement function definitions
-        // This requires:
-        // 1. Parse function name, parameters, and return type
-        // 2. Generate Zig function signature
-        // 3. Visit function body
-        // 4. Track function in function_signatures for later calls
-        return error.NotImplemented;
+        // For now, generate simple functions with i64 parameters and return type
+        // This handles common cases like fibonacci(n: int) -> int
+
+        var buf = std.ArrayList(u8){};
+
+        // Start function signature
+        try buf.writer(self.allocator).print("fn {s}(", .{func.name});
+
+        // Add parameters - assume i64 for now
+        for (func.args, 0..) |arg, i| {
+            if (i > 0) {
+                try buf.writer(self.allocator).writeAll(", ");
+            }
+            try buf.writer(self.allocator).print("{s}: i64", .{arg.name});
+        }
+
+        // Add allocator parameter if needed
+        if (self.needs_allocator) {
+            if (func.args.len > 0) {
+                try buf.writer(self.allocator).writeAll(", ");
+            }
+            try buf.writer(self.allocator).writeAll("allocator: std.mem.Allocator");
+        }
+
+        // Close signature - assume i64 return type for now
+        try buf.writer(self.allocator).writeAll(") i64 {");
+
+        try self.emit(try buf.toOwnedSlice(self.allocator));
+        self.indent();
+
+        // Generate function body
+        for (func.body) |stmt| {
+            try self.visitNode(stmt);
+        }
+
+        self.dedent();
+        try self.emit("}");
     }
 
     fn visitReturn(self: *ZigCodeGenerator, ret: ast.Node.Return) CodegenError!void {

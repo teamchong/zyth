@@ -45,6 +45,9 @@ pub const TokenType = enum {
     LtEq,
     Gt,
     GtEq,
+    Ampersand,
+    Pipe,
+    Caret,
 
     // Delimiters
     LParen,
@@ -137,7 +140,7 @@ pub const Lexer = struct {
                 // Only emit newline if not inside parens and previous token isn't newline
                 if (paren_depth == 0 and tokens.items.len > 0) {
                     const last = tokens.items[tokens.items.len - 1];
-                    if (last.type != .Newline and last.type != .Colon) {
+                    if (last.type != .Newline) {
                         try tokens.append(self.allocator, Token{
                             .type = .Newline,
                             .lexeme = "\n",
@@ -323,7 +326,8 @@ pub const Lexer = struct {
             while (!self.isAtEnd()) {
                 if (self.peek() == quote and
                     self.peekAhead(1) == quote and
-                    self.peekAhead(2) == quote) {
+                    self.peekAhead(2) == quote)
+                {
                     _ = self.advance();
                     _ = self.advance();
                     _ = self.advance();
@@ -438,6 +442,9 @@ pub const Lexer = struct {
                 }
                 break :blk .Gt;
             },
+            '&' => .Ampersand,
+            '|' => .Pipe,
+            '^' => .Caret,
             else => return null,
         };
 

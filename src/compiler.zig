@@ -20,12 +20,20 @@ pub fn compileZig(allocator: std.mem.Allocator, zig_code: []const u8, output_pat
     const output_flag = try std.fmt.allocPrint(allocator, "-femit-bin={s}", .{output_path});
     defer allocator.free(output_flag);
 
+    // Get runtime path and add it to the module search path
+    const runtime_path = try std.fs.cwd().realpathAlloc(allocator, "packages/runtime/src");
+    defer allocator.free(runtime_path);
+
+    const i_flag = try std.fmt.allocPrint(allocator, "-I{s}", .{runtime_path});
+    defer allocator.free(i_flag);
+
     const result = try std.process.Child.run(.{
         .allocator = allocator,
         .argv = &[_][]const u8{
             zig_path,
             "build-exe",
             tmp_path,
+            i_flag,
             "-ODebug",
             output_flag,
         },
