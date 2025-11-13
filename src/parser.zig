@@ -426,11 +426,17 @@ pub const Parser = struct {
 
     fn parseNotExpr(self: *Parser) ParseError!ast.Node {
         if (self.match(.Not)) {
-            // For simplicity, treat 'not x' as a comparison
-            // In real Python AST, this would be a UnaryOp
-            const operand = try self.parseComparison();
-            // For now, just return the operand (this is incomplete)
-            return operand;
+            const operand = try self.parseNotExpr(); // Recursive for multiple nots
+
+            const operand_ptr = try self.allocator.create(ast.Node);
+            operand_ptr.* = operand;
+
+            return ast.Node{
+                .unaryop = .{
+                    .op = .Not,
+                    .operand = operand_ptr,
+                },
+            };
         }
 
         return try self.parseComparison();

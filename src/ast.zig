@@ -5,6 +5,7 @@ pub const Node = union(enum) {
     module: Module,
     assign: Assign,
     binop: BinOp,
+    unaryop: UnaryOp,
     compare: Compare,
     boolop: BoolOp,
     call: Call,
@@ -34,6 +35,11 @@ pub const Node = union(enum) {
         left: *Node,
         op: Operator,
         right: *Node,
+    };
+
+    pub const UnaryOp = struct {
+        op: UnaryOperator,
+        operand: *Node,
     };
 
     pub const Call = struct {
@@ -138,6 +144,10 @@ pub const CompareOp = enum {
 pub const BoolOperator = enum {
     And,
     Or,
+};
+
+pub const UnaryOperator = enum {
+    Not,
 };
 
 pub const Value = union(enum) {

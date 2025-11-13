@@ -597,4 +597,32 @@ pub const PyString = struct {
         const str_val = getValue(obj);
         return std.fmt.parseInt(i64, str_val, 10);
     }
+
+    pub fn lstrip(allocator: std.mem.Allocator, obj: *PyObject) !*PyObject {
+        std.debug.assert(obj.type_id == .string);
+        const data: *PyString = @ptrCast(@alignCast(obj.data));
+        const str = data.data;
+
+        // Find first non-whitespace
+        var start: usize = 0;
+        while (start < str.len and std.ascii.isWhitespace(str[start])) : (start += 1) {}
+
+        // Create left-stripped string
+        const stripped = str[start..];
+        return try create(allocator, stripped);
+    }
+
+    pub fn rstrip(allocator: std.mem.Allocator, obj: *PyObject) !*PyObject {
+        std.debug.assert(obj.type_id == .string);
+        const data: *PyString = @ptrCast(@alignCast(obj.data));
+        const str = data.data;
+
+        // Find last non-whitespace
+        var end: usize = str.len;
+        while (end > 0 and std.ascii.isWhitespace(str[end - 1])) : (end -= 1) {}
+
+        // Create right-stripped string
+        const stripped = str[0..end];
+        return try create(allocator, stripped);
+    }
 };
