@@ -58,6 +58,8 @@ pub const ExprResult = struct {
 /// Zig code generator - ports Python ZigCodeGenerator class
 pub const ZigCodeGenerator = struct {
     allocator: std.mem.Allocator,
+    arena: std.heap.ArenaAllocator,
+    temp_allocator: std.mem.Allocator,
     output: std.ArrayList(u8),
     indent_level: usize,
 
@@ -76,8 +78,11 @@ pub const ZigCodeGenerator = struct {
 
     pub fn init(allocator: std.mem.Allocator) !*ZigCodeGenerator {
         const self = try allocator.create(ZigCodeGenerator);
+        const arena = std.heap.ArenaAllocator.init(allocator);
         self.* = ZigCodeGenerator{
             .allocator = allocator,
+            .arena = arena,
+            .temp_allocator = undefined, // Will be set after arena is in struct
             .output = std.ArrayList(u8){},
             .indent_level = 0,
             .var_types = std.StringHashMap([]const u8).init(allocator),
@@ -91,10 +96,13 @@ pub const ZigCodeGenerator = struct {
             .needs_allocator = false,
             .temp_var_counter = 0,
         };
+        // Set temp_allocator after arena is moved into struct
+        self.temp_allocator = self.arena.allocator();
         return self;
     }
 
     pub fn deinit(self: *ZigCodeGenerator) void {
+        self.arena.deinit(); // Free ALL temp allocations at once
         self.output.deinit(self.allocator);
         self.var_types.deinit();
         self.declared_vars.deinit();
@@ -118,7 +126,7 @@ pub const ZigCodeGenerator = struct {
 
     /// Emit a line and free the owned slice after copying it
     pub fn emitOwned(self: *ZigCodeGenerator, code: []const u8) CodegenError!void {
-        defer self.allocator.free(code);
+        defer self.temp_allocator.free(code);
         try self.emit(code);
     }
 

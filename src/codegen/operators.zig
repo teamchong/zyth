@@ -85,10 +85,10 @@ pub fn visitBinOp(self: *ZigCodeGenerator, binop: ast.Node.BinOp) CodegenError!E
             else
                 right_result.code;
 
-            try buf.writer(self.allocator).print("runtime.PyString.concat(allocator, {s}, {s})", .{ left_code, right_code });
+            try buf.writer(self.temp_allocator).print("runtime.PyString.concat(allocator, {s}, {s})", .{ left_code, right_code });
 
             return ExprResult{
-                .code = try buf.toOwnedSlice(self.allocator),
+                .code = try buf.toOwnedSlice(self.temp_allocator),
                 .needs_try = true,
             };
         }
@@ -98,21 +98,21 @@ pub fn visitBinOp(self: *ZigCodeGenerator, binop: ast.Node.BinOp) CodegenError!E
     switch (binop.op) {
         .FloorDiv => {
             // Floor division: use @divFloor builtin
-            try buf.writer(self.allocator).print("@divFloor({s}, {s})", .{ left_result.code, right_result.code });
+            try buf.writer(self.temp_allocator).print("@divFloor({s}, {s})", .{ left_result.code, right_result.code });
         },
         .Pow => {
             // Exponentiation: use std.math.pow
-            try buf.writer(self.allocator).print("std.math.pow(i64, {s}, {s})", .{ left_result.code, right_result.code });
+            try buf.writer(self.temp_allocator).print("std.math.pow(i64, {s}, {s})", .{ left_result.code, right_result.code });
         },
         else => {
             // Standard operators that map directly to Zig operators
             const op_str = visitBinOpHelper(self, binop.op);
-            try buf.writer(self.allocator).print("{s} {s} {s}", .{ left_result.code, op_str, right_result.code });
+            try buf.writer(self.temp_allocator).print("{s} {s} {s}", .{ left_result.code, op_str, right_result.code });
         },
     }
 
     return ExprResult{
-        .code = try buf.toOwnedSlice(self.allocator),
+        .code = try buf.toOwnedSlice(self.temp_allocator),
         .needs_try = left_result.needs_try or right_result.needs_try,
     };
 }
@@ -128,10 +128,10 @@ pub fn visitUnaryOp(self: *ZigCodeGenerator, unaryop: ast.Node.UnaryOp) CodegenE
     };
 
     var buf = std.ArrayList(u8){};
-    try buf.writer(self.allocator).print("{s}({s})", .{ op_str, operand_result.code });
+    try buf.writer(self.temp_allocator).print("{s}({s})", .{ op_str, operand_result.code });
 
     return ExprResult{
-        .code = try buf.toOwnedSlice(self.allocator),
+        .code = try buf.toOwnedSlice(self.temp_allocator),
         .needs_try = operand_result.needs_try,
     };
 }
@@ -151,10 +151,10 @@ pub fn visitBoolOp(self: *ZigCodeGenerator, boolop: ast.Node.BoolOp) CodegenErro
     };
 
     var buf = std.ArrayList(u8){};
-    try buf.writer(self.allocator).print("({s} {s} {s})", .{ left_result.code, op_str, right_result.code });
+    try buf.writer(self.temp_allocator).print("({s} {s} {s})", .{ left_result.code, op_str, right_result.code });
 
     return ExprResult{
-        .code = try buf.toOwnedSlice(self.allocator),
+        .code = try buf.toOwnedSlice(self.temp_allocator),
         .needs_try = left_result.needs_try or right_result.needs_try,
     };
 }
@@ -213,22 +213,22 @@ pub fn visitCompare(self: *ZigCodeGenerator, compare: ast.Node.Compare) CodegenE
 
             // Generate block expression: blk: { const temp = try <create_call>; defer decref; break :blk contains(...); }
             const negation = if (op == .NotIn) "!" else "";
-            try buf.writer(self.allocator).print(
+            try buf.writer(self.temp_allocator).print(
                 "blk: {{ const {s} = try {s}; defer runtime.decref({s}, allocator); break :blk {s}runtime.contains({s}, {s}); }}",
                 .{ temp_var_name, create_call, temp_var_name, negation, temp_var_name, right_result.code }
             );
         } else {
             // No temp needed - direct contains call
             const negation = if (op == .NotIn) "!" else "";
-            try buf.writer(self.allocator).print("{s}runtime.contains({s}, {s})", .{ negation, left_code, right_result.code });
+            try buf.writer(self.temp_allocator).print("{s}runtime.contains({s}, {s})", .{ negation, left_code, right_result.code });
         }
     } else {
         const op_str = visitCompareOp(self, op);
-        try buf.writer(self.allocator).print("{s} {s} {s}", .{ left_result.code, op_str, right_result.code });
+        try buf.writer(self.temp_allocator).print("{s} {s} {s}", .{ left_result.code, op_str, right_result.code });
     }
 
     return ExprResult{
-        .code = try buf.toOwnedSlice(self.allocator),
+        .code = try buf.toOwnedSlice(self.temp_allocator),
         .needs_try = false,
     };
 }

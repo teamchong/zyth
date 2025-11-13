@@ -61,7 +61,7 @@ fn visitConstant(self: *ZigCodeGenerator, constant: ast.Node.Constant) CodegenEr
             }
 
             // Generate Zig code with proper escaping
-            try buf.writer(self.allocator).writeAll("runtime.PyString.create(allocator, \"");
+            try buf.writer(self.temp_allocator).writeAll("runtime.PyString.create(allocator, \"");
 
             // Escape content for Zig string
             // Python escape sequences: already processed by Python lexer,
@@ -77,49 +77,49 @@ fn visitConstant(self: *ZigCodeGenerator, constant: ast.Node.Constant) CodegenEr
                             switch (next) {
                                 'n', 'r', 't', '\\', '\"', '\'', '0', 'a', 'b', 'f', 'v' => {
                                     // Pass through escape sequences
-                                    try buf.writer(self.allocator).writeByte('\\');
+                                    try buf.writer(self.temp_allocator).writeByte('\\');
                                     i += 1;
-                                    try buf.writer(self.allocator).writeByte(content[i]);
+                                    try buf.writer(self.temp_allocator).writeByte(content[i]);
                                 },
                                 'x', 'u', 'U' => {
                                     // Hex/Unicode escapes - pass through for now
-                                    try buf.writer(self.allocator).writeAll("\\\\");
+                                    try buf.writer(self.temp_allocator).writeAll("\\\\");
                                 },
                                 else => {
-                                    try buf.writer(self.allocator).writeAll("\\\\");
+                                    try buf.writer(self.temp_allocator).writeAll("\\\\");
                                 },
                             }
                         } else {
-                            try buf.writer(self.allocator).writeAll("\\\\");
+                            try buf.writer(self.temp_allocator).writeAll("\\\\");
                         }
                     },
-                    '\"' => try buf.writer(self.allocator).writeAll("\\\""),
-                    '\n' => try buf.writer(self.allocator).writeAll("\\n"),
-                    '\r' => try buf.writer(self.allocator).writeAll("\\r"),
-                    '\t' => try buf.writer(self.allocator).writeAll("\\t"),
+                    '\"' => try buf.writer(self.temp_allocator).writeAll("\\\""),
+                    '\n' => try buf.writer(self.temp_allocator).writeAll("\\n"),
+                    '\r' => try buf.writer(self.temp_allocator).writeAll("\\r"),
+                    '\t' => try buf.writer(self.temp_allocator).writeAll("\\t"),
                     else => {
                         if (c >= 32 and c <= 126) {
-                            try buf.writer(self.allocator).writeByte(c);
+                            try buf.writer(self.temp_allocator).writeByte(c);
                         } else {
                             // Non-printable - escape as hex
-                            try buf.writer(self.allocator).print("\\x{X:0>2}", .{c});
+                            try buf.writer(self.temp_allocator).print("\\x{X:0>2}", .{c});
                         }
                     },
                 }
             }
 
-            try buf.writer(self.allocator).writeAll("\")");
+            try buf.writer(self.temp_allocator).writeAll("\")");
 
             return ExprResult{
-                .code = try buf.toOwnedSlice(self.allocator),
+                .code = try buf.toOwnedSlice(self.temp_allocator),
                 .needs_try = true,
             };
         },
         .int => |num| {
             var buf = std.ArrayList(u8){};
-            try buf.writer(self.allocator).print("{d}", .{num});
+            try buf.writer(self.temp_allocator).print("{d}", .{num});
             return ExprResult{
-                .code = try buf.toOwnedSlice(self.allocator),
+                .code = try buf.toOwnedSlice(self.temp_allocator),
                 .needs_try = false,
             };
         },
@@ -131,9 +131,9 @@ fn visitConstant(self: *ZigCodeGenerator, constant: ast.Node.Constant) CodegenEr
         },
         .float => |f| {
             var buf = std.ArrayList(u8){};
-            try buf.writer(self.allocator).print("{d}", .{f});
+            try buf.writer(self.temp_allocator).print("{d}", .{f});
             return ExprResult{
-                .code = try buf.toOwnedSlice(self.allocator),
+                .code = try buf.toOwnedSlice(self.temp_allocator),
                 .needs_try = false,
             };
         },
@@ -153,8 +153,8 @@ fn visitList(self: *ZigCodeGenerator, list: ast.Node.List) CodegenError!ExprResu
 
     // Emit list creation as statements
     var create_buf = std.ArrayList(u8){};
-    try create_buf.writer(self.allocator).print("const {s} = try runtime.PyList.create(allocator);", .{list_var});
-    try self.emitOwned(try create_buf.toOwnedSlice(self.allocator));
+    try create_buf.writer(self.temp_allocator).print("const {s} = try runtime.PyList.create(allocator);", .{list_var});
+    try self.emitOwned(try create_buf.toOwnedSlice(self.temp_allocator));
 
     // Append each element
     for (list.elts) |elt| {
@@ -181,13 +181,13 @@ fn visitList(self: *ZigCodeGenerator, list: ast.Node.List) CodegenError!ExprResu
                 },
                 else => elt_result.code,
             };
-            try append_buf.writer(self.allocator).print("try runtime.PyList.append({s}, {s});", .{ list_var, wrapped_code });
+            try append_buf.writer(self.temp_allocator).print("try runtime.PyList.append({s}, {s});", .{ list_var, wrapped_code });
         } else if (elt_result.needs_try) {
-            try append_buf.writer(self.allocator).print("try runtime.PyList.append({s}, try {s});", .{ list_var, elt_result.code });
+            try append_buf.writer(self.temp_allocator).print("try runtime.PyList.append({s}, try {s});", .{ list_var, elt_result.code });
         } else {
-            try append_buf.writer(self.allocator).print("try runtime.PyList.append({s}, {s});", .{ list_var, elt_result.code });
+            try append_buf.writer(self.temp_allocator).print("try runtime.PyList.append({s}, {s});", .{ list_var, elt_result.code });
         }
-        try self.emitOwned(try append_buf.toOwnedSlice(self.allocator));
+        try self.emitOwned(try append_buf.toOwnedSlice(self.temp_allocator));
     }
 
     // Return the list variable name
@@ -210,8 +210,8 @@ fn visitDict(self: *ZigCodeGenerator, dict: ast.Node.Dict) CodegenError!ExprResu
 
     // Emit dict creation as statement
     var create_buf = std.ArrayList(u8){};
-    try create_buf.writer(self.allocator).print("const {s} = try runtime.PyDict.create(allocator);", .{dict_var});
-    try self.emitOwned(try create_buf.toOwnedSlice(self.allocator));
+    try create_buf.writer(self.temp_allocator).print("const {s} = try runtime.PyDict.create(allocator);", .{dict_var});
+    try self.emitOwned(try create_buf.toOwnedSlice(self.temp_allocator));
 
     // Set each key-value pair
     for (dict.keys, dict.values) |key, value| {
@@ -259,8 +259,8 @@ fn visitDict(self: *ZigCodeGenerator, dict: ast.Node.Dict) CodegenError!ExprResu
             break :blk try std.fmt.allocPrint(self.allocator, "try {s}", .{value_result.code});
         } else value_result.code;
 
-        try set_buf.writer(self.allocator).print("try runtime.PyDict.set({s}, {s}, {s});", .{ dict_var, key_code, value_code });
-        try self.emitOwned(try set_buf.toOwnedSlice(self.allocator));
+        try set_buf.writer(self.temp_allocator).print("try runtime.PyDict.set({s}, {s}, {s});", .{ dict_var, key_code, value_code });
+        try self.emitOwned(try set_buf.toOwnedSlice(self.temp_allocator));
     }
 
     // Return the dict variable name
@@ -283,8 +283,8 @@ fn visitTuple(self: *ZigCodeGenerator, tuple: ast.Node.Tuple) CodegenError!ExprR
 
     // Emit tuple creation as statement
     var create_buf = std.ArrayList(u8){};
-    try create_buf.writer(self.allocator).print("const {s} = try runtime.PyTuple.create(allocator, {d});", .{ tuple_var, tuple.elts.len });
-    try self.emitOwned(try create_buf.toOwnedSlice(self.allocator));
+    try create_buf.writer(self.temp_allocator).print("const {s} = try runtime.PyTuple.create(allocator, {d});", .{ tuple_var, tuple.elts.len });
+    try self.emitOwned(try create_buf.toOwnedSlice(self.temp_allocator));
 
     // Set each element
     for (tuple.elts, 0..) |elt, i| {
@@ -311,13 +311,13 @@ fn visitTuple(self: *ZigCodeGenerator, tuple: ast.Node.Tuple) CodegenError!ExprR
                 },
                 else => elt_result.code,
             };
-            try set_buf.writer(self.allocator).print("runtime.PyTuple.setItem({s}, {d}, {s});", .{ tuple_var, i, wrapped_code });
+            try set_buf.writer(self.temp_allocator).print("runtime.PyTuple.setItem({s}, {d}, {s});", .{ tuple_var, i, wrapped_code });
         } else if (elt_result.needs_try) {
-            try set_buf.writer(self.allocator).print("runtime.PyTuple.setItem({s}, {d}, try {s});", .{ tuple_var, i, elt_result.code });
+            try set_buf.writer(self.temp_allocator).print("runtime.PyTuple.setItem({s}, {d}, try {s});", .{ tuple_var, i, elt_result.code });
         } else {
-            try set_buf.writer(self.allocator).print("runtime.PyTuple.setItem({s}, {d}, {s});", .{ tuple_var, i, elt_result.code });
+            try set_buf.writer(self.temp_allocator).print("runtime.PyTuple.setItem({s}, {d}, {s});", .{ tuple_var, i, elt_result.code });
         }
-        try self.emitOwned(try set_buf.toOwnedSlice(self.allocator));
+        try self.emitOwned(try set_buf.toOwnedSlice(self.temp_allocator));
     }
 
     // Return the tuple variable name
@@ -359,16 +359,16 @@ fn visitSubscript(self: *ZigCodeGenerator, sub: ast.Node.Subscript) CodegenError
             if (std.mem.eql(u8, value_type, "string")) {
                 // String indexing
                 if (idx_result.needs_try) {
-                    try buf.writer(self.allocator).print("runtime.PyString.charAt(allocator, {s}, try {s})", .{ value_result.code, idx_result.code });
+                    try buf.writer(self.temp_allocator).print("runtime.PyString.charAt(allocator, {s}, try {s})", .{ value_result.code, idx_result.code });
                 } else {
-                    try buf.writer(self.allocator).print("runtime.PyString.charAt(allocator, {s}, {s})", .{ value_result.code, idx_result.code });
+                    try buf.writer(self.temp_allocator).print("runtime.PyString.charAt(allocator, {s}, {s})", .{ value_result.code, idx_result.code });
                 }
             } else if (std.mem.eql(u8, value_type, "tuple")) {
                 // Tuple indexing
                 if (idx_result.needs_try) {
-                    try buf.writer(self.allocator).print("runtime.PyTuple.getItem({s}, @intCast(try {s}))", .{ value_result.code, idx_result.code });
+                    try buf.writer(self.temp_allocator).print("runtime.PyTuple.getItem({s}, @intCast(try {s}))", .{ value_result.code, idx_result.code });
                 } else {
-                    try buf.writer(self.allocator).print("runtime.PyTuple.getItem({s}, @intCast({s}))", .{ value_result.code, idx_result.code });
+                    try buf.writer(self.temp_allocator).print("runtime.PyTuple.getItem({s}, @intCast({s}))", .{ value_result.code, idx_result.code });
                 }
             } else if (std.mem.eql(u8, value_type, "dict")) {
                 // Dict indexing - extract string key
@@ -386,23 +386,23 @@ fn visitSubscript(self: *ZigCodeGenerator, sub: ast.Node.Subscript) CodegenError
                     },
                     else => idx_result.code,
                 };
-                try buf.writer(self.allocator).print("runtime.PyDict.get({s}, {s}).?", .{ value_result.code, key_code });
+                try buf.writer(self.temp_allocator).print("runtime.PyDict.get({s}, {s}).?", .{ value_result.code, key_code });
                 // Dict.get() returns optional, not error union, so no try needed
                 return ExprResult{
-                    .code = try buf.toOwnedSlice(self.allocator),
+                    .code = try buf.toOwnedSlice(self.temp_allocator),
                     .needs_try = false,
                 };
             } else {
                 // List indexing
                 if (idx_result.needs_try) {
-                    try buf.writer(self.allocator).print("runtime.PyList.get({s}, try {s})", .{ value_result.code, idx_result.code });
+                    try buf.writer(self.temp_allocator).print("runtime.PyList.get({s}, try {s})", .{ value_result.code, idx_result.code });
                 } else {
-                    try buf.writer(self.allocator).print("runtime.PyList.get({s}, {s})", .{ value_result.code, idx_result.code });
+                    try buf.writer(self.temp_allocator).print("runtime.PyList.get({s}, {s})", .{ value_result.code, idx_result.code });
                 }
             }
 
             return ExprResult{
-                .code = try buf.toOwnedSlice(self.allocator),
+                .code = try buf.toOwnedSlice(self.temp_allocator),
                 .needs_try = true,
             };
         },
@@ -444,21 +444,21 @@ fn visitSubscript(self: *ZigCodeGenerator, sub: ast.Node.Subscript) CodegenError
             if (is_string) {
                 // String slicing
                 if (range.step == null) {
-                    try buf.writer(self.allocator).print("runtime.PyString.slice(allocator, {s}, {s}, {s})", .{ value_result.code, lower_code, upper_code });
+                    try buf.writer(self.temp_allocator).print("runtime.PyString.slice(allocator, {s}, {s}, {s})", .{ value_result.code, lower_code, upper_code });
                 } else {
-                    try buf.writer(self.allocator).print("runtime.PyString.sliceWithStep(allocator, {s}, {s}, {s}, {s})", .{ value_result.code, lower_code, upper_code, step_code });
+                    try buf.writer(self.temp_allocator).print("runtime.PyString.sliceWithStep(allocator, {s}, {s}, {s}, {s})", .{ value_result.code, lower_code, upper_code, step_code });
                 }
             } else {
                 // List slicing
                 if (range.step == null) {
-                    try buf.writer(self.allocator).print("runtime.PyList.slice(allocator, {s}, {s}, {s})", .{ value_result.code, lower_code, upper_code });
+                    try buf.writer(self.temp_allocator).print("runtime.PyList.slice(allocator, {s}, {s}, {s})", .{ value_result.code, lower_code, upper_code });
                 } else {
-                    try buf.writer(self.allocator).print("runtime.PyList.sliceWithStep(allocator, {s}, {s}, {s}, {s})", .{ value_result.code, lower_code, upper_code, step_code });
+                    try buf.writer(self.temp_allocator).print("runtime.PyList.sliceWithStep(allocator, {s}, {s}, {s}, {s})", .{ value_result.code, lower_code, upper_code, step_code });
                 }
             }
 
             return ExprResult{
-                .code = try buf.toOwnedSlice(self.allocator),
+                .code = try buf.toOwnedSlice(self.temp_allocator),
                 .needs_try = true,
                 .needs_decref = true,
             };
@@ -515,28 +515,28 @@ fn visitUserFunctionCall(self: *ZigCodeGenerator, func_name: []const u8, args: [
     var buf = std.ArrayList(u8){};
 
     // Generate function call: func_name(arg1, arg2, ...)
-    try buf.writer(self.allocator).print("{s}(", .{func_name});
+    try buf.writer(self.temp_allocator).print("{s}(", .{func_name});
 
     // Add arguments
     for (args, 0..) |arg, i| {
         if (i > 0) {
-            try buf.writer(self.allocator).writeAll(", ");
+            try buf.writer(self.temp_allocator).writeAll(", ");
         }
         const arg_result = try visitExpr(self, arg);
-        try buf.writer(self.allocator).writeAll(arg_result.code);
+        try buf.writer(self.temp_allocator).writeAll(arg_result.code);
     }
 
     // Add allocator if needed
     if (self.needs_allocator and args.len > 0) {
-        try buf.writer(self.allocator).writeAll(", allocator");
+        try buf.writer(self.temp_allocator).writeAll(", allocator");
     } else if (self.needs_allocator) {
-        try buf.writer(self.allocator).writeAll("allocator");
+        try buf.writer(self.temp_allocator).writeAll("allocator");
     }
 
-    try buf.writer(self.allocator).writeAll(")");
+    try buf.writer(self.temp_allocator).writeAll(")");
 
     return ExprResult{
-        .code = try buf.toOwnedSlice(self.allocator),
+        .code = try buf.toOwnedSlice(self.temp_allocator),
         .needs_try = false,
     };
 }

@@ -9,24 +9,24 @@ const statements = @import("statements.zig");
 pub fn visitAttribute(self: *ZigCodeGenerator, attr: ast.Node.Attribute) CodegenError!ExprResult {
     const value_result = try expressions.visitExpr(self,attr.value.*);
     var buf = std.ArrayList(u8){};
-    try buf.writer(self.allocator).print("{s}.{s}", .{ value_result.code, attr.attr });
+    try buf.writer(self.temp_allocator).print("{s}.{s}", .{ value_result.code, attr.attr });
     return ExprResult{
-        .code = try buf.toOwnedSlice(self.allocator),
+        .code = try buf.toOwnedSlice(self.temp_allocator),
         .needs_try = false,
     };
 }
 
 pub fn visitClassInstantiation(self: *ZigCodeGenerator, class_name: []const u8, args: []ast.Node) CodegenError!ExprResult {
     var buf = std.ArrayList(u8){};
-    try buf.writer(self.allocator).print("{s}.init(", .{class_name});
+    try buf.writer(self.temp_allocator).print("{s}.init(", .{class_name});
     for (args, 0..) |arg, i| {
-        if (i > 0) try buf.writer(self.allocator).writeAll(", ");
+        if (i > 0) try buf.writer(self.temp_allocator).writeAll(", ");
         const arg_result = try expressions.visitExpr(self,arg);
-        try buf.writer(self.allocator).writeAll(arg_result.code);
+        try buf.writer(self.temp_allocator).writeAll(arg_result.code);
     }
-    try buf.writer(self.allocator).writeAll(")");
+    try buf.writer(self.temp_allocator).writeAll(")");
     return ExprResult{
-        .code = try buf.toOwnedSlice(self.allocator),
+        .code = try buf.toOwnedSlice(self.temp_allocator),
         .needs_try = false,
     };
 }
@@ -34,8 +34,8 @@ pub fn visitClassInstantiation(self: *ZigCodeGenerator, class_name: []const u8, 
 pub fn visitClassDef(self: *ZigCodeGenerator, class: ast.Node.ClassDef) CodegenError!void {
     try self.class_names.put(class.name, {});
     var buf = std.ArrayList(u8){};
-    try buf.writer(self.allocator).print("const {s} = struct {{", .{class.name});
-    try self.emitOwned(try buf.toOwnedSlice(self.allocator));
+    try buf.writer(self.temp_allocator).print("const {s} = struct {{", .{class.name});
+    try self.emitOwned(try buf.toOwnedSlice(self.temp_allocator));
     self.indent();
 
     var init_method: ?ast.Node.FunctionDef = null;
@@ -66,8 +66,8 @@ pub fn visitClassDef(self: *ZigCodeGenerator, class: ast.Node.ClassDef) CodegenE
                                     .name => |name| {
                                         if (std.mem.eql(u8, name.id, "self")) {
                                             var field_buf = std.ArrayList(u8){};
-                                            try field_buf.writer(self.allocator).print("{s}: i64,", .{attr.attr});
-                                            try self.emitOwned(try field_buf.toOwnedSlice(self.allocator));
+                                            try field_buf.writer(self.temp_allocator).print("{s}: i64,", .{attr.attr});
+                                            try self.emitOwned(try field_buf.toOwnedSlice(self.temp_allocator));
                                         }
                                     },
                                     else => {},
@@ -83,21 +83,21 @@ pub fn visitClassDef(self: *ZigCodeGenerator, class: ast.Node.ClassDef) CodegenE
 
         try self.emit("");
         buf = std.ArrayList(u8){};
-        try buf.writer(self.allocator).writeAll("pub fn init(");
+        try buf.writer(self.temp_allocator).writeAll("pub fn init(");
 
         for (init_func.args, 0..) |arg, i| {
             if (std.mem.eql(u8, arg.name, "self")) continue;
-            if (i > 1) try buf.writer(self.allocator).writeAll(", ");
-            try buf.writer(self.allocator).print("{s}: i64", .{arg.name});
+            if (i > 1) try buf.writer(self.temp_allocator).writeAll(", ");
+            try buf.writer(self.temp_allocator).print("{s}: i64", .{arg.name});
         }
 
-        try buf.writer(self.allocator).print(") {s} {{", .{class.name});
-        try self.emitOwned(try buf.toOwnedSlice(self.allocator));
+        try buf.writer(self.temp_allocator).print(") {s} {{", .{class.name});
+        try self.emitOwned(try buf.toOwnedSlice(self.temp_allocator));
         self.indent();
 
         buf = std.ArrayList(u8){};
-        try buf.writer(self.allocator).print("return {s}{{", .{class.name});
-        try self.emitOwned(try buf.toOwnedSlice(self.allocator));
+        try buf.writer(self.temp_allocator).print("return {s}{{", .{class.name});
+        try self.emitOwned(try buf.toOwnedSlice(self.temp_allocator));
         self.indent();
 
         for (init_func.body) |stmt| {
@@ -111,8 +111,8 @@ pub fn visitClassDef(self: *ZigCodeGenerator, class: ast.Node.ClassDef) CodegenE
                                         if (std.mem.eql(u8, name.id, "self")) {
                                             const value_result = try expressions.visitExpr(self,assign.value.*);
                                             buf = std.ArrayList(u8){};
-                                            try buf.writer(self.allocator).print(".{s} = {s},", .{ attr.attr, value_result.code });
-                                            try self.emitOwned(try buf.toOwnedSlice(self.allocator));
+                                            try buf.writer(self.temp_allocator).print(".{s} = {s},", .{ attr.attr, value_result.code });
+                                            try self.emitOwned(try buf.toOwnedSlice(self.temp_allocator));
                                         }
                                     },
                                     else => {},
@@ -135,19 +135,19 @@ pub fn visitClassDef(self: *ZigCodeGenerator, class: ast.Node.ClassDef) CodegenE
     for (methods.items) |method| {
         try self.emit("");
         buf = std.ArrayList(u8){};
-        try buf.writer(self.allocator).print("pub fn {s}(", .{method.name});
+        try buf.writer(self.temp_allocator).print("pub fn {s}(", .{method.name});
 
         for (method.args, 0..) |arg, i| {
-            if (i > 0) try buf.writer(self.allocator).writeAll(", ");
+            if (i > 0) try buf.writer(self.temp_allocator).writeAll(", ");
             if (std.mem.eql(u8, arg.name, "self")) {
-                try buf.writer(self.allocator).print("self: *{s}", .{class.name});
+                try buf.writer(self.temp_allocator).print("self: *{s}", .{class.name});
             } else {
-                try buf.writer(self.allocator).print("{s}: i64", .{arg.name});
+                try buf.writer(self.temp_allocator).print("{s}: i64", .{arg.name});
             }
         }
 
-        try buf.writer(self.allocator).writeAll(") void {");
-        try self.emitOwned(try buf.toOwnedSlice(self.allocator));
+        try buf.writer(self.temp_allocator).writeAll(") void {");
+        try self.emitOwned(try buf.toOwnedSlice(self.temp_allocator));
         self.indent();
 
         for (method.body) |stmt| {
@@ -169,20 +169,20 @@ pub fn visitMethodCall(self: *ZigCodeGenerator, attr: ast.Node.Attribute, args: 
 
     // String methods
     if (std.mem.eql(u8, method_name, "upper")) {
-        try buf.writer(self.allocator).print("runtime.PyString.upper(allocator, {s})", .{obj_result.code});
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = true };
+        try buf.writer(self.temp_allocator).print("runtime.PyString.upper(allocator, {s})", .{obj_result.code});
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = true };
     } else if (std.mem.eql(u8, method_name, "lower")) {
-        try buf.writer(self.allocator).print("runtime.PyString.lower(allocator, {s})", .{obj_result.code});
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = true };
+        try buf.writer(self.temp_allocator).print("runtime.PyString.lower(allocator, {s})", .{obj_result.code});
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = true };
     } else if (std.mem.eql(u8, method_name, "strip")) {
-        try buf.writer(self.allocator).print("runtime.PyString.strip(allocator, {s})", .{obj_result.code});
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = true };
+        try buf.writer(self.temp_allocator).print("runtime.PyString.strip(allocator, {s})", .{obj_result.code});
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = true };
     } else if (std.mem.eql(u8, method_name, "lstrip")) {
-        try buf.writer(self.allocator).print("runtime.PyString.lstrip(allocator, {s})", .{obj_result.code});
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = true };
+        try buf.writer(self.temp_allocator).print("runtime.PyString.lstrip(allocator, {s})", .{obj_result.code});
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = true };
     } else if (std.mem.eql(u8, method_name, "rstrip")) {
-        try buf.writer(self.allocator).print("runtime.PyString.rstrip(allocator, {s})", .{obj_result.code});
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = true };
+        try buf.writer(self.temp_allocator).print("runtime.PyString.rstrip(allocator, {s})", .{obj_result.code});
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = true };
     } else if (std.mem.eql(u8, method_name, "split")) {
         if (args.len != 1) return error.InvalidArguments;
         const arg_result = try expressions.visitExpr(self,args[0]);
@@ -190,8 +190,8 @@ pub fn visitMethodCall(self: *ZigCodeGenerator, attr: ast.Node.Attribute, args: 
             try std.fmt.allocPrint(self.allocator, "try {s}", .{arg_result.code})
         else
             arg_result.code;
-        try buf.writer(self.allocator).print("runtime.PyString.split(allocator, {s}, {s})", .{ obj_result.code, arg_code });
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = true };
+        try buf.writer(self.temp_allocator).print("runtime.PyString.split(allocator, {s}, {s})", .{ obj_result.code, arg_code });
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = true };
     } else if (std.mem.eql(u8, method_name, "replace")) {
         if (args.len != 2) return error.InvalidArguments;
         const arg1_result = try expressions.visitExpr(self,args[0]);
@@ -204,104 +204,104 @@ pub fn visitMethodCall(self: *ZigCodeGenerator, attr: ast.Node.Attribute, args: 
             try std.fmt.allocPrint(self.allocator, "try {s}", .{arg2_result.code})
         else
             arg2_result.code;
-        try buf.writer(self.allocator).print("runtime.PyString.replace(allocator, {s}, {s}, {s})", .{ obj_result.code, arg1_code, arg2_code });
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = true };
+        try buf.writer(self.temp_allocator).print("runtime.PyString.replace(allocator, {s}, {s}, {s})", .{ obj_result.code, arg1_code, arg2_code });
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = true };
     } else if (std.mem.eql(u8, method_name, "capitalize")) {
-        try buf.writer(self.allocator).print("runtime.PyString.capitalize(allocator, {s})", .{obj_result.code});
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = true };
+        try buf.writer(self.temp_allocator).print("runtime.PyString.capitalize(allocator, {s})", .{obj_result.code});
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = true };
     } else if (std.mem.eql(u8, method_name, "swapcase")) {
-        try buf.writer(self.allocator).print("runtime.PyString.swapcase(allocator, {s})", .{obj_result.code});
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = true };
+        try buf.writer(self.temp_allocator).print("runtime.PyString.swapcase(allocator, {s})", .{obj_result.code});
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = true };
     } else if (std.mem.eql(u8, method_name, "title")) {
-        try buf.writer(self.allocator).print("runtime.PyString.title(allocator, {s})", .{obj_result.code});
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = true };
+        try buf.writer(self.temp_allocator).print("runtime.PyString.title(allocator, {s})", .{obj_result.code});
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = true };
     } else if (std.mem.eql(u8, method_name, "center")) {
         if (args.len != 1) return error.InvalidArguments;
         const arg_result = try expressions.visitExpr(self,args[0]);
-        try buf.writer(self.allocator).print("runtime.PyString.center(allocator, {s}, {s})", .{ obj_result.code, arg_result.code });
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = true };
+        try buf.writer(self.temp_allocator).print("runtime.PyString.center(allocator, {s}, {s})", .{ obj_result.code, arg_result.code });
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = true };
     } else if (std.mem.eql(u8, method_name, "join")) {
         if (args.len != 1) return error.InvalidArguments;
         const arg_result = try expressions.visitExpr(self,args[0]);
-        try buf.writer(self.allocator).print("runtime.PyString.join(allocator, {s}, {s})", .{ obj_result.code, arg_result.code });
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = true };
+        try buf.writer(self.temp_allocator).print("runtime.PyString.join(allocator, {s}, {s})", .{ obj_result.code, arg_result.code });
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = true };
     } else if (std.mem.eql(u8, method_name, "startswith")) {
         if (args.len != 1) return error.InvalidArguments;
         const arg_result = try expressions.visitExpr(self,args[0]);
-        try buf.writer(self.allocator).print("runtime.PyString.startswith({s}, {s})", .{ obj_result.code, arg_result.code });
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = false };
+        try buf.writer(self.temp_allocator).print("runtime.PyString.startswith({s}, {s})", .{ obj_result.code, arg_result.code });
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = false };
     } else if (std.mem.eql(u8, method_name, "endswith")) {
         if (args.len != 1) return error.InvalidArguments;
         const arg_result = try expressions.visitExpr(self,args[0]);
-        try buf.writer(self.allocator).print("runtime.PyString.endswith({s}, {s})", .{ obj_result.code, arg_result.code });
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = false };
+        try buf.writer(self.temp_allocator).print("runtime.PyString.endswith({s}, {s})", .{ obj_result.code, arg_result.code });
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = false };
     } else if (std.mem.eql(u8, method_name, "isdigit")) {
-        try buf.writer(self.allocator).print("runtime.PyString.isdigit({s})", .{obj_result.code});
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = false };
+        try buf.writer(self.temp_allocator).print("runtime.PyString.isdigit({s})", .{obj_result.code});
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = false };
     } else if (std.mem.eql(u8, method_name, "isalpha")) {
-        try buf.writer(self.allocator).print("runtime.PyString.isalpha({s})", .{obj_result.code});
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = false };
+        try buf.writer(self.temp_allocator).print("runtime.PyString.isalpha({s})", .{obj_result.code});
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = false };
     } else if (std.mem.eql(u8, method_name, "find")) {
         if (args.len != 1) return error.InvalidArguments;
         const arg_result = try expressions.visitExpr(self,args[0]);
-        try buf.writer(self.allocator).print("runtime.PyString.find({s}, {s})", .{ obj_result.code, arg_result.code });
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = false };
+        try buf.writer(self.temp_allocator).print("runtime.PyString.find({s}, {s})", .{ obj_result.code, arg_result.code });
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = false };
     }
     // List methods
     else if (std.mem.eql(u8, method_name, "append")) {
         if (args.len != 1) return error.InvalidArguments;
         const arg_result = try expressions.visitExpr(self,args[0]);
-        try buf.writer(self.allocator).print("runtime.PyList.append({s}, {s})", .{ obj_result.code, arg_result.code });
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = true };
+        try buf.writer(self.temp_allocator).print("runtime.PyList.append({s}, {s})", .{ obj_result.code, arg_result.code });
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = true };
     } else if (std.mem.eql(u8, method_name, "pop")) {
-        try buf.writer(self.allocator).print("runtime.PyList.pop(allocator, {s})", .{obj_result.code});
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = true };
+        try buf.writer(self.temp_allocator).print("runtime.PyList.pop(allocator, {s})", .{obj_result.code});
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = true };
     } else if (std.mem.eql(u8, method_name, "extend")) {
         if (args.len != 1) return error.InvalidArguments;
         const arg_result = try expressions.visitExpr(self,args[0]);
-        try buf.writer(self.allocator).print("runtime.PyList.extend({s}, {s})", .{ obj_result.code, arg_result.code });
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = true };
+        try buf.writer(self.temp_allocator).print("runtime.PyList.extend({s}, {s})", .{ obj_result.code, arg_result.code });
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = true };
     } else if (std.mem.eql(u8, method_name, "reverse")) {
-        try buf.writer(self.allocator).print("runtime.PyList.reverse({s})", .{obj_result.code});
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = false };
+        try buf.writer(self.temp_allocator).print("runtime.PyList.reverse({s})", .{obj_result.code});
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = false };
     } else if (std.mem.eql(u8, method_name, "remove")) {
         if (args.len != 1) return error.InvalidArguments;
         const arg_result = try expressions.visitExpr(self,args[0]);
-        try buf.writer(self.allocator).print("runtime.PyList.remove(allocator, {s}, {s})", .{ obj_result.code, arg_result.code });
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = true };
+        try buf.writer(self.temp_allocator).print("runtime.PyList.remove(allocator, {s}, {s})", .{ obj_result.code, arg_result.code });
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = true };
     } else if (std.mem.eql(u8, method_name, "count")) {
         if (args.len != 1) return error.InvalidArguments;
         const arg_result = try expressions.visitExpr(self,args[0]);
-        try buf.writer(self.allocator).print("runtime.PyList.count({s}, {s})", .{ obj_result.code, arg_result.code });
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = false };
+        try buf.writer(self.temp_allocator).print("runtime.PyList.count({s}, {s})", .{ obj_result.code, arg_result.code });
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = false };
     } else if (std.mem.eql(u8, method_name, "index")) {
         if (args.len != 1) return error.InvalidArguments;
         const arg_result = try expressions.visitExpr(self,args[0]);
-        try buf.writer(self.allocator).print("runtime.PyList.index({s}, {s})", .{ obj_result.code, arg_result.code });
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = false };
+        try buf.writer(self.temp_allocator).print("runtime.PyList.index({s}, {s})", .{ obj_result.code, arg_result.code });
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = false };
     } else if (std.mem.eql(u8, method_name, "insert")) {
         if (args.len != 2) return error.InvalidArguments;
         const arg1_result = try expressions.visitExpr(self,args[0]);
         const arg2_result = try expressions.visitExpr(self,args[1]);
-        try buf.writer(self.allocator).print("runtime.PyList.insert(allocator, {s}, {s}, {s})", .{ obj_result.code, arg1_result.code, arg2_result.code });
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = true };
+        try buf.writer(self.temp_allocator).print("runtime.PyList.insert(allocator, {s}, {s}, {s})", .{ obj_result.code, arg1_result.code, arg2_result.code });
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = true };
     } else if (std.mem.eql(u8, method_name, "clear")) {
-        try buf.writer(self.allocator).print("runtime.PyList.clear(allocator, {s})", .{obj_result.code});
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = false };
+        try buf.writer(self.temp_allocator).print("runtime.PyList.clear(allocator, {s})", .{obj_result.code});
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = false };
     } else if (std.mem.eql(u8, method_name, "sort")) {
-        try buf.writer(self.allocator).print("runtime.PyList.sort({s})", .{obj_result.code});
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = false };
+        try buf.writer(self.temp_allocator).print("runtime.PyList.sort({s})", .{obj_result.code});
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = false };
     } else if (std.mem.eql(u8, method_name, "copy")) {
-        try buf.writer(self.allocator).print("runtime.PyList.copy(allocator, {s})", .{obj_result.code});
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = true };
+        try buf.writer(self.temp_allocator).print("runtime.PyList.copy(allocator, {s})", .{obj_result.code});
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = true };
     }
     // Dict methods
     else if (std.mem.eql(u8, method_name, "keys")) {
-        try buf.writer(self.allocator).print("runtime.PyDict.keys(allocator, {s})", .{obj_result.code});
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = true };
+        try buf.writer(self.temp_allocator).print("runtime.PyDict.keys(allocator, {s})", .{obj_result.code});
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = true };
     } else if (std.mem.eql(u8, method_name, "values")) {
-        try buf.writer(self.allocator).print("runtime.PyDict.values(allocator, {s})", .{obj_result.code});
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = true };
+        try buf.writer(self.temp_allocator).print("runtime.PyDict.values(allocator, {s})", .{obj_result.code});
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = true };
     } else if (std.mem.eql(u8, method_name, "get")) {
         if (args.len < 1 or args.len > 2) return error.InvalidArguments;
         const key_result = try expressions.visitExpr(self,args[0]);
@@ -317,16 +317,16 @@ pub fn visitMethodCall(self: *ZigCodeGenerator, attr: ast.Node.Attribute, args: 
             try std.fmt.allocPrint(self.allocator, "try {s}", .{default_result.code})
         else
             default_result.code;
-        try buf.writer(self.allocator).print("runtime.PyDict.get_method(allocator, {s}, {s}, {s})", .{ obj_result.code, key_code, default_code });
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = false };
+        try buf.writer(self.temp_allocator).print("runtime.PyDict.get_method(allocator, {s}, {s}, {s})", .{ obj_result.code, key_code, default_code });
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = false };
     } else if (std.mem.eql(u8, method_name, "items")) {
-        try buf.writer(self.allocator).print("runtime.PyDict.items(allocator, {s})", .{obj_result.code});
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = true };
+        try buf.writer(self.temp_allocator).print("runtime.PyDict.items(allocator, {s})", .{obj_result.code});
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = true };
     } else if (std.mem.eql(u8, method_name, "update")) {
         if (args.len != 1) return error.InvalidArguments;
         const arg_result = try expressions.visitExpr(self,args[0]);
-        try buf.writer(self.allocator).print("runtime.PyDict.update({s}, {s})", .{ obj_result.code, arg_result.code });
-        return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = true };
+        try buf.writer(self.temp_allocator).print("runtime.PyDict.update({s}, {s})", .{ obj_result.code, arg_result.code });
+        return ExprResult{ .code = try buf.toOwnedSlice(self.temp_allocator), .needs_try = true };
     } else {
         return error.UnsupportedMethod;
     }

@@ -25,11 +25,11 @@ pub fn visitNode(self: *ZigCodeGenerator, node: ast.Node) CodegenError!void {
                 if (result.code.len > 0) {
                     var buf = std.ArrayList(u8){};
                     if (result.needs_try) {
-                        try buf.writer(self.allocator).print("try {s};", .{result.code});
+                        try buf.writer(self.temp_allocator).print("try {s};", .{result.code});
                     } else {
-                        try buf.writer(self.allocator).print("{s};", .{result.code});
+                        try buf.writer(self.temp_allocator).print("{s};", .{result.code});
                     }
-                    try self.emitOwned(try buf.toOwnedSlice(self.allocator));
+                    try self.emitOwned(try buf.toOwnedSlice(self.temp_allocator));
                 }
             }
         },
@@ -169,8 +169,8 @@ fn visitAssign(self: *ZigCodeGenerator, assign: ast.Node.Assign) CodegenError!vo
 
             if (is_first_assignment) {
                 if (value_result.needs_try) {
-                    try buf.writer(self.allocator).print("{s} {s} = try {s};", .{ var_keyword, var_name, value_result.code });
-                    try self.emitOwned(try buf.toOwnedSlice(self.allocator));
+                    try buf.writer(self.temp_allocator).print("{s} {s} = try {s};", .{ var_keyword, var_name, value_result.code });
+                    try self.emitOwned(try buf.toOwnedSlice(self.temp_allocator));
 
                     // Add defer for strings and PyObjects
                     const var_type = self.var_types.get(var_name);
@@ -183,8 +183,8 @@ fn visitAssign(self: *ZigCodeGenerator, assign: ast.Node.Assign) CodegenError!vo
                     ));
                     if (needs_defer) {
                         var defer_buf = std.ArrayList(u8){};
-                        try defer_buf.writer(self.allocator).print("defer runtime.decref({s}, allocator);", .{var_name});
-                        try self.emitOwned(try defer_buf.toOwnedSlice(self.allocator));
+                        try defer_buf.writer(self.temp_allocator).print("defer runtime.decref({s}, allocator);", .{var_name});
+                        try self.emitOwned(try defer_buf.toOwnedSlice(self.temp_allocator));
                     }
                 } else {
                     // Add explicit type for 'var' declarations
@@ -192,11 +192,11 @@ fn visitAssign(self: *ZigCodeGenerator, assign: ast.Node.Assign) CodegenError!vo
                     const is_var = std.mem.eql(u8, var_keyword, "var");
 
                     if (is_var and var_type != null and std.mem.eql(u8, var_type.?, "int")) {
-                        try buf.writer(self.allocator).print("{s} {s}: i64 = {s};", .{ var_keyword, var_name, value_result.code });
+                        try buf.writer(self.temp_allocator).print("{s} {s}: i64 = {s};", .{ var_keyword, var_name, value_result.code });
                     } else {
-                        try buf.writer(self.allocator).print("{s} {s} = {s};", .{ var_keyword, var_name, value_result.code });
+                        try buf.writer(self.temp_allocator).print("{s} {s} = {s};", .{ var_keyword, var_name, value_result.code });
                     }
-                    try self.emitOwned(try buf.toOwnedSlice(self.allocator));
+                    try self.emitOwned(try buf.toOwnedSlice(self.temp_allocator));
 
                     // Add defer for list/dict/tuple (which don't use needs_try) or if needs_decref is set
                     const needs_defer = value_result.needs_decref or (var_type != null and (
@@ -206,8 +206,8 @@ fn visitAssign(self: *ZigCodeGenerator, assign: ast.Node.Assign) CodegenError!vo
                     ));
                     if (needs_defer) {
                         var defer_buf = std.ArrayList(u8){};
-                        try defer_buf.writer(self.allocator).print("defer runtime.decref({s}, allocator);", .{var_name});
-                        try self.emitOwned(try defer_buf.toOwnedSlice(self.allocator));
+                        try defer_buf.writer(self.temp_allocator).print("defer runtime.decref({s}, allocator);", .{var_name});
+                        try self.emitOwned(try defer_buf.toOwnedSlice(self.temp_allocator));
                     }
                 }
             } else {
@@ -215,16 +215,16 @@ fn visitAssign(self: *ZigCodeGenerator, assign: ast.Node.Assign) CodegenError!vo
                 const var_type = self.var_types.get(var_name);
                 if (var_type != null and std.mem.eql(u8, var_type.?, "string")) {
                     var decref_buf = std.ArrayList(u8){};
-                    try decref_buf.writer(self.allocator).print("runtime.decref({s}, allocator);", .{var_name});
-                    try self.emitOwned(try decref_buf.toOwnedSlice(self.allocator));
+                    try decref_buf.writer(self.temp_allocator).print("runtime.decref({s}, allocator);", .{var_name});
+                    try self.emitOwned(try decref_buf.toOwnedSlice(self.temp_allocator));
                 }
 
                 if (value_result.needs_try) {
-                    try buf.writer(self.allocator).print("{s} = try {s};", .{ var_name, value_result.code });
+                    try buf.writer(self.temp_allocator).print("{s} = try {s};", .{ var_name, value_result.code });
                 } else {
-                    try buf.writer(self.allocator).print("{s} = {s};", .{ var_name, value_result.code });
+                    try buf.writer(self.temp_allocator).print("{s} = {s};", .{ var_name, value_result.code });
                 }
-                try self.emitOwned(try buf.toOwnedSlice(self.allocator));
+                try self.emitOwned(try buf.toOwnedSlice(self.temp_allocator));
             }
         },
         .attribute => |attr| {
@@ -238,11 +238,11 @@ fn visitAssign(self: *ZigCodeGenerator, assign: ast.Node.Assign) CodegenError!vo
             // Generate assignment code: attr = value;
             var buf = std.ArrayList(u8){};
             if (value_result.needs_try) {
-                try buf.writer(self.allocator).print("{s} = try {s};", .{ attr_result.code, value_result.code });
+                try buf.writer(self.temp_allocator).print("{s} = try {s};", .{ attr_result.code, value_result.code });
             } else {
-                try buf.writer(self.allocator).print("{s} = {s};", .{ attr_result.code, value_result.code });
+                try buf.writer(self.temp_allocator).print("{s} = {s};", .{ attr_result.code, value_result.code });
             }
-            try self.emitOwned(try buf.toOwnedSlice(self.allocator));
+            try self.emitOwned(try buf.toOwnedSlice(self.temp_allocator));
         },
         .tuple => |targets| {
             // Handle tuple unpacking: a, b = (1, 2) or a, b = t
@@ -287,18 +287,18 @@ fn visitAssign(self: *ZigCodeGenerator, assign: ast.Node.Assign) CodegenError!vo
                                 var buf = std.ArrayList(u8){};
                                 if (is_first_assignment) {
                                     if (val_result.needs_try) {
-                                        try buf.writer(self.allocator).print("{s} {s} = try {s};", .{ var_keyword, var_name, val_result.code });
+                                        try buf.writer(self.temp_allocator).print("{s} {s} = try {s};", .{ var_keyword, var_name, val_result.code });
                                     } else {
-                                        try buf.writer(self.allocator).print("{s} {s} = {s};", .{ var_keyword, var_name, val_result.code });
+                                        try buf.writer(self.temp_allocator).print("{s} {s} = {s};", .{ var_keyword, var_name, val_result.code });
                                     }
                                 } else {
                                     if (val_result.needs_try) {
-                                        try buf.writer(self.allocator).print("{s} = try {s};", .{ var_name, val_result.code });
+                                        try buf.writer(self.temp_allocator).print("{s} = try {s};", .{ var_name, val_result.code });
                                     } else {
-                                        try buf.writer(self.allocator).print("{s} = {s};", .{ var_name, val_result.code });
+                                        try buf.writer(self.temp_allocator).print("{s} = {s};", .{ var_name, val_result.code });
                                     }
                                 }
-                                try self.emitOwned(try buf.toOwnedSlice(self.allocator));
+                                try self.emitOwned(try buf.toOwnedSlice(self.temp_allocator));
                             },
                             else => return error.UnsupportedTarget,
                         }
@@ -329,11 +329,11 @@ fn visitAssign(self: *ZigCodeGenerator, assign: ast.Node.Assign) CodegenError!vo
                                 // Generate code to extract from tuple
                                 var buf = std.ArrayList(u8){};
                                 if (is_first_assignment) {
-                                    try buf.writer(self.allocator).print("{s} {s} = try runtime.PyTuple.getItem({s}, {d});", .{ var_keyword, var_name, value_result.code, i });
+                                    try buf.writer(self.temp_allocator).print("{s} {s} = try runtime.PyTuple.getItem({s}, {d});", .{ var_keyword, var_name, value_result.code, i });
                                 } else {
-                                    try buf.writer(self.allocator).print("{s} = try runtime.PyTuple.getItem({s}, {d});", .{ var_name, value_result.code, i });
+                                    try buf.writer(self.temp_allocator).print("{s} = try runtime.PyTuple.getItem({s}, {d});", .{ var_name, value_result.code, i });
                                 }
-                                try self.emitOwned(try buf.toOwnedSlice(self.allocator));
+                                try self.emitOwned(try buf.toOwnedSlice(self.temp_allocator));
                             },
                             else => return error.UnsupportedTarget,
                         }
@@ -352,12 +352,12 @@ fn visitReturn(self: *ZigCodeGenerator, ret: ast.Node.Return) CodegenError!void 
         var buf = std.ArrayList(u8){};
 
         if (value_result.needs_try) {
-            try buf.writer(self.allocator).print("return try {s};", .{value_result.code});
+            try buf.writer(self.temp_allocator).print("return try {s};", .{value_result.code});
         } else {
-            try buf.writer(self.allocator).print("return {s};", .{value_result.code});
+            try buf.writer(self.temp_allocator).print("return {s};", .{value_result.code});
         }
 
-        try self.emitOwned(try buf.toOwnedSlice(self.allocator));
+        try self.emitOwned(try buf.toOwnedSlice(self.temp_allocator));
     } else {
         try self.emit("return;");
     }

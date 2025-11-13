@@ -15,28 +15,28 @@ pub fn visitFunctionDef(self: *ZigCodeGenerator, func: ast.Node.FunctionDef) Cod
     var buf = std.ArrayList(u8){};
 
     // Start function signature
-    try buf.writer(self.allocator).print("fn {s}(", .{func.name});
+    try buf.writer(self.temp_allocator).print("fn {s}(", .{func.name});
 
     // Add parameters - assume i64 for now
     for (func.args, 0..) |arg, i| {
         if (i > 0) {
-            try buf.writer(self.allocator).writeAll(", ");
+            try buf.writer(self.temp_allocator).writeAll(", ");
         }
-        try buf.writer(self.allocator).print("{s}: i64", .{arg.name});
+        try buf.writer(self.temp_allocator).print("{s}: i64", .{arg.name});
     }
 
     // Add allocator parameter if needed
     if (self.needs_allocator) {
         if (func.args.len > 0) {
-            try buf.writer(self.allocator).writeAll(", ");
+            try buf.writer(self.temp_allocator).writeAll(", ");
         }
-        try buf.writer(self.allocator).writeAll("allocator: std.mem.Allocator");
+        try buf.writer(self.temp_allocator).writeAll("allocator: std.mem.Allocator");
     }
 
     // Close signature - assume i64 return type for now
-    try buf.writer(self.allocator).writeAll(") i64 {");
+    try buf.writer(self.temp_allocator).writeAll(") i64 {");
 
-    try self.emitOwned(try buf.toOwnedSlice(self.allocator));
+    try self.emitOwned(try buf.toOwnedSlice(self.temp_allocator));
     self.indent();
 
     // Generate function body
@@ -53,28 +53,28 @@ pub fn visitUserFunctionCall(self: *ZigCodeGenerator, func_name: []const u8, arg
     var buf = std.ArrayList(u8){};
 
     // Generate function call: func_name(arg1, arg2, ...)
-    try buf.writer(self.allocator).print("{s}(", .{func_name});
+    try buf.writer(self.temp_allocator).print("{s}(", .{func_name});
 
     // Add arguments
     for (args, 0..) |arg, i| {
         if (i > 0) {
-            try buf.writer(self.allocator).writeAll(", ");
+            try buf.writer(self.temp_allocator).writeAll(", ");
         }
         const arg_result = try self.visitExpr(arg);
-        try buf.writer(self.allocator).writeAll(arg_result.code);
+        try buf.writer(self.temp_allocator).writeAll(arg_result.code);
     }
 
     // Add allocator if needed
     if (self.needs_allocator and args.len > 0) {
-        try buf.writer(self.allocator).writeAll(", allocator");
+        try buf.writer(self.temp_allocator).writeAll(", allocator");
     } else if (self.needs_allocator) {
-        try buf.writer(self.allocator).writeAll("allocator");
+        try buf.writer(self.temp_allocator).writeAll("allocator");
     }
 
-    try buf.writer(self.allocator).writeAll(")");
+    try buf.writer(self.temp_allocator).writeAll(")");
 
     return ExprResult{
-        .code = try buf.toOwnedSlice(self.allocator),
+        .code = try buf.toOwnedSlice(self.temp_allocator),
         .needs_try = false,
     };
 }
