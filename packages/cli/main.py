@@ -135,9 +135,48 @@ def cmd_build(args):
         sys.exit(1)
 
 
+def cmd_test(args):
+    """Run pytest test suite"""
+    import subprocess
+
+    # Run pytest with proper arguments
+    cmd = ["pytest"]
+
+    # Add path filter if specified
+    if hasattr(args, 'filter') and args.filter:
+        # If filter looks like a path, use it as path, otherwise as -k keyword
+        if '/' in args.filter or args.filter.endswith('.py'):
+            cmd.append(args.filter)
+        else:
+            cmd.extend(['-k', args.filter])
+
+    # Add verbosity (default to verbose)
+    cmd.append('-v')
+
+    # Run tests
+    result = subprocess.run(cmd)
+    sys.exit(result.returncode)
+
+
 def main() -> None:
-    # Check if first argument is 'build' subcommand
-    if len(sys.argv) > 1 and sys.argv[1] == 'build':
+    # Check if first argument is a subcommand
+    if len(sys.argv) > 1 and sys.argv[1] == 'test':
+        # Parse as test subcommand
+        parser = argparse.ArgumentParser(
+            description="Zyth: Run test suite",
+            prog="zyth test"
+        )
+        parser.add_argument(
+            'filter',
+            nargs='?',
+            help='Filter tests (file path or keyword)'
+        )
+
+        # Remove 'test' from argv before parsing
+        sys.argv.pop(1)
+        args = parser.parse_args()
+        cmd_test(args)
+    elif len(sys.argv) > 1 and sys.argv[1] == 'build':
         # Parse as build subcommand
         parser = argparse.ArgumentParser(
             description="Zyth: Build Python files to binaries",
@@ -176,6 +215,9 @@ Examples:
   zyth build .                # Build current dir only (non-recursive) → ./bin/
   zyth build examples/        # Build examples/ recursively → ./bin/
   zyth build script.py        # Build single file → ./bin/script
+  zyth test                   # Run all tests
+  zyth test fibonacci         # Run tests matching 'fibonacci'
+  zyth test tests/test_slicing.py  # Run specific test file
   zyth script.py --show-zig   # Show generated Zig code
             """
         )
