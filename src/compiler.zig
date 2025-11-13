@@ -2,6 +2,24 @@ const std = @import("std");
 
 /// Compile Zig source code to native binary
 pub fn compileZig(allocator: std.mem.Allocator, zig_code: []const u8, output_path: []const u8) !void {
+    // Copy runtime files to /tmp for import
+    const runtime_files = [_][]const u8{ "runtime.zig", "pystring.zig", "pylist.zig", "dict.zig", "pyint.zig", "pytuple.zig" };
+    for (runtime_files) |file| {
+        const src_path = try std.fmt.allocPrint(allocator, "packages/runtime/src/{s}", .{file});
+        defer allocator.free(src_path);
+        const dst_path = try std.fmt.allocPrint(allocator, "/tmp/{s}", .{file});
+        defer allocator.free(dst_path);
+
+        const src = std.fs.cwd().openFile(src_path, .{}) catch continue;
+        defer src.close();
+        const dst = try std.fs.createFileAbsolute(dst_path, .{});
+        defer dst.close();
+
+        const content = try src.readToEndAlloc(allocator, 1024 * 1024);
+        defer allocator.free(content);
+        try dst.writeAll(content);
+    }
+
     // Write Zig code to temporary file
     const tmp_path = try std.fmt.allocPrint(allocator, "/tmp/zyth_main_{d}.zig", .{std.time.milliTimestamp()});
     defer allocator.free(tmp_path);

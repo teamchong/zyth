@@ -206,6 +206,30 @@ pub const ZigCodeGenerator = struct {
             .assign => |assign| {
                 try self.detectRuntimeNeedsExpr(assign.value.*);
             },
+            .if_stmt => |if_stmt| {
+                // Check condition
+                try self.detectRuntimeNeedsExpr(if_stmt.condition.*);
+                // Check body
+                for (if_stmt.body) |stmt| {
+                    try self.detectRuntimeNeeds(stmt);
+                }
+                // Check else body
+                for (if_stmt.else_body) |stmt| {
+                    try self.detectRuntimeNeeds(stmt);
+                }
+            },
+            .while_stmt => |while_stmt| {
+                try self.detectRuntimeNeedsExpr(while_stmt.condition.*);
+                for (while_stmt.body) |stmt| {
+                    try self.detectRuntimeNeeds(stmt);
+                }
+            },
+            .for_stmt => |for_stmt| {
+                try self.detectRuntimeNeedsExpr(for_stmt.iter.*);
+                for (for_stmt.body) |stmt| {
+                    try self.detectRuntimeNeeds(stmt);
+                }
+            },
             else => {},
         }
     }
@@ -763,7 +787,19 @@ pub const ZigCodeGenerator = struct {
                 }
             },
             else => {
-                try buf.writer(self.allocator).print("std.debug.print(\"{{}}\\n\", .{{{s}}})", .{arg_result.code});
+                // For string constants, use getValue
+                const is_string_const = switch (arg) {
+                    .constant => |c| c.value == .string,
+                    else => false,
+                };
+
+                if (is_string_const) {
+                    try buf.writer(self.allocator).print("std.debug.print(\"{{s}}\\n\", .{{runtime.PyString.getValue(try {s})}})", .{arg_result.code});
+                } else if (arg_result.needs_try) {
+                    try buf.writer(self.allocator).print("std.debug.print(\"{{}}\\n\", .{{try {s}}})", .{arg_result.code});
+                } else {
+                    try buf.writer(self.allocator).print("std.debug.print(\"{{}}\\n\", .{{{s}}})", .{arg_result.code});
+                }
             },
         }
 
