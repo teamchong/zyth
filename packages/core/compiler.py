@@ -488,7 +488,7 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) < 2:
-        print("Usage: python -m zyth_core.compiler <file.py> [output]")
+        print("Usage: python -m core.compiler <file.py> [output]")
         sys.exit(1)
 
     filepath = sys.argv[1]

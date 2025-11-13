@@ -13,7 +13,7 @@ help:
 	@echo "format      - Format code"
 	@echo "typecheck   - Run type checker"
 	@echo "clean       - Remove build artifacts"
-	@echo "run         - Run example (make run FILE=examples/fibonacci.py)"
+	@echo "run         - Run example (make run FILE=examples/fibonacci.py) [DEPRECATED: use 'zyth' command]"
 	@echo "benchmark   - Run performance benchmarks"
 
 install-dev:
@@ -28,7 +28,7 @@ install-dev:
 	@echo "To use 'zyth' command, activate the virtual environment:"
 	@echo "  source .venv/bin/activate"
 	@echo ""
-	@echo "Or use: make run FILE=examples/fibonacci.py"
+	@echo "Or use: uv run zyth examples/fibonacci.py"
 	@echo ""
 
 install:
@@ -66,10 +66,13 @@ clean:
 	find . -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name ".mypy_cache" -exec rm -rf {} + 2>/dev/null || true
-	rm -f output fib_binary test_output
+	rm -rf bin/ output fib_binary test_output
 
 run:
-	uv run zyth $(FILE) --run
+	@echo "⚠️  DEPRECATED: Use 'zyth' command directly instead"
+	@echo "    New: zyth $(FILE)"
+	@echo ""
+	uv run zyth $(FILE)
 
 benchmark:
 	uv run python _prototype/benchmark.py

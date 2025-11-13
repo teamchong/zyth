@@ -13,7 +13,7 @@
 ### What Needs Completion
 
 #### 1. Add method_nodes to ClassInfo
-**File:** `packages/core/zyth_core/codegen.py:17`
+**File:** `packages/core/core/codegen.py:17`
 
 ```python
 @dataclass
@@ -28,7 +28,7 @@ class ClassInfo:
 ```
 
 #### 2. Store method AST nodes during class analysis
-**File:** `packages/core/zyth_core/codegen.py:457`
+**File:** `packages/core/core/codegen.py:457`
 
 ```python
 # Analyze method signatures and store AST nodes
@@ -59,7 +59,7 @@ self.class_definitions[class_name] = ClassInfo(
 ```
 
 #### 3. Update pre-analysis to include method_nodes
-**File:** `packages/core/zyth_core/codegen.py:195`
+**File:** `packages/core/core/codegen.py:195`
 
 ```python
 self.class_definitions[cls.name] = ClassInfo(
@@ -73,7 +73,7 @@ self.class_definitions[cls.name] = ClassInfo(
 ```
 
 #### 4. Generate inherited methods
-**File:** `packages/core/zyth_core/codegen.py:485` (after child methods)
+**File:** `packages/core/core/codegen.py:485` (after child methods)
 
 ```python
 # Generate methods
@@ -97,7 +97,7 @@ After applying the above changes:
 
 ```bash
 # Should work
-uv run python -m zyth_core.compiler examples/class_inherit_vehicle.py /tmp/test_vehicle
+uv run python -m core.compiler examples/class_inherit_vehicle.py /tmp/test_vehicle
 /tmp/test_vehicle
 # Output: 4\n4
 

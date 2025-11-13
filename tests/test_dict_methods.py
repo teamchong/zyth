@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 ZYTH_ROOT = Path(__file__).parent.parent
-COMPILER = ZYTH_ROOT / "packages" / "core" / "zyth_core" / "compiler.py"
+COMPILER = ZYTH_ROOT / "packages" / "core" / "core" / "compiler.py"
 
 
 def run_code(code: str) -> tuple[str, str]:

@@ -23,7 +23,7 @@ zyth/
 packages/
 ├── core/                   # @zyth/core - Compiler
 │   ├── pyproject.toml
-│   ├── zyth_core/
+│   ├── core/
 │   │   ├── parser.py
 │   │   ├── typechecker.py
 │   │   ├── codegen.py

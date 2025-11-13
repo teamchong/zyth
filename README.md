@@ -18,7 +18,7 @@ make install-dev
 source .venv/bin/activate
 
 # Compile and run
-zyth examples/fibonacci.py --run
+zyth examples/fibonacci.py
 ```
 
 ## Installation
@@ -56,17 +56,23 @@ zyth --help
 ## Usage
 
 ```bash
-# Compile Python to native binary
+# Smart run (compile if needed, then execute)
 zyth app.py
 
-# Compile and run immediately
-zyth app.py --run
+# Build to ./bin/ without running
+zyth build app.py
 
-# Specify output path
-zyth app.py -o my_binary
+# Build all Python files recursively
+zyth build
+
+# Build current directory only (non-recursive)
+zyth build .
 
 # Show generated Zig code
 zyth app.py --show-zig
+
+# Custom output directory
+zyth build app.py -o dist/
 ```
 
 ## Example
@@ -82,10 +88,14 @@ result = fibonacci(10)
 print(result)
 ```
 
-**Compile:**
+**Compile and run:**
 ```bash
-zyth examples/fibonacci.py -o fib
-./fib
+zyth examples/fibonacci.py
+# Output: 55
+
+# Or build without running
+zyth build examples/fibonacci.py
+./bin/fibonacci
 # Output: 55
 ```
 

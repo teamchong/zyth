@@ -1730,7 +1730,7 @@ class ZigCodeGenerator(CodegenHelpers, ExpressionVisitor):
                     else:
                         self.var_types[target.id] = "int"  # Default to int for primitives
 
-            # Track type for module function calls (e.g., mymath.add)
+            # Special handling for module function calls with string arguments (e.g., strutils.repeat("Hi", 5))
             if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute):
                 if isinstance(node.value.func.value, ast.Name):
                     module_name = node.value.func.value.id
@@ -1738,6 +1738,62 @@ class ZigCodeGenerator(CodegenHelpers, ExpressionVisitor):
                     if module_name in self.module_functions:
                         if func_name in self.module_functions[module_name]:
                             sig = self.module_functions[module_name][func_name]
+
+                            # Check if any arguments are string constants
+                            temp_args = []
+                            for i, arg in enumerate(node.value.args):
+                                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                                    temp_var = f"_temp_arg_{id(arg)}"
+                                    self.emit(f"const {temp_var} = try runtime.PyString.create(allocator, \"{arg.value}\");")
+                                    self.emit(f"defer runtime.decref({temp_var}, allocator);")
+                                    temp_args.append((i, temp_var))
+
+                            # If we have temp args, generate the call with them
+                            if temp_args:
+                                args = []
+                                if sig["needs_allocator"]:
+                                    args.append("allocator")
+
+                                temp_arg_dict = dict(temp_args)
+                                for i, arg in enumerate(node.value.args):
+                                    if i in temp_arg_dict:
+                                        args.append(temp_arg_dict[i])
+                                    else:
+                                        arg_code, arg_try = self.visit_expr(arg)
+                                        if arg_try:
+                                            args.append(f"try {arg_code}")
+                                        else:
+                                            args.append(arg_code)
+
+                                func_call = f"{module_name}_{func_name}({', '.join(args)})"
+                                needs_try = sig.get("returns_pyobject", False) or sig.get("return_type", "").startswith("!")
+
+                                # Track type
+                                if sig["returns_pyobject"]:
+                                    self.var_types[target.id] = "string"  # Default to string for PyObjects
+                                else:
+                                    self.var_types[target.id] = "int"  # Default to int for primitives
+
+                                if is_first_assignment:
+                                    if needs_try:
+                                        self.emit(f"{var_keyword} {target.id} = try {func_call};")
+                                        if sig.get("returns_pyobject", False):
+                                            self.emit(f"defer runtime.decref({target.id}, allocator);")
+                                    else:
+                                        self.emit(f"{var_keyword} {target.id} = {func_call};")
+                                else:
+                                    # Reassignment
+                                    var_type = self.var_types.get(target.id)
+                                    is_pyobject = var_type in ["string", "list", "dict", "pyint"]
+                                    if is_pyobject:
+                                        self.emit(f"runtime.decref({target.id}, allocator);")
+                                    if needs_try:
+                                        self.emit(f"{target.id} = try {func_call};")
+                                    else:
+                                        self.emit(f"{target.id} = {func_call};")
+                                return
+
+                            # No temp args - just track type
                             if sig["returns_pyobject"]:
                                 self.var_types[target.id] = "string"  # Default to string for PyObjects
                             else:
@@ -2003,10 +2059,14 @@ class ZigCodeGenerator(CodegenHelpers, ExpressionVisitor):
                         self.emit(f"{var_keyword} {target.id} = try {value_code};")
 
                     # If assigning a parameter, incref it (param is owned by caller)
+                    if isinstance(node.value, ast.Name) and node.value.id in self.function_params:
+                        source_type = self.var_types.get(node.value.id)
+                        source_is_pyobject = source_type in ["string", "list", "dict", "pyint"]
+                        if source_is_pyobject:
+                            self.emit(f"runtime.incref({target.id});")
+
+                    # Get var_type for defer logic below
                     var_type = self.var_types.get(target.id)
-                    is_pyobject = var_type in ["string", "list", "dict", "pyint"]
-                    if is_pyobject and isinstance(node.value, ast.Name) and node.value.id in self.function_params:
-                        self.emit(f"runtime.incref({target.id});")
 
                     # Check if it's a class instance (needs deinit) or PyObject (needs decref)
                     # IMPORTANT: Index subscripts (list[i], dict[key]) return borrowed references

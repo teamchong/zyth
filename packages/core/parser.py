@@ -113,7 +113,7 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) < 2:
-        print("Usage: python -m zyth_core.parser <file.py>")
+        print("Usage: python -m core.parser <file.py>")
         sys.exit(1)
 
     filepath = sys.argv[1]
