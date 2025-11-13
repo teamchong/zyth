@@ -19,6 +19,7 @@ pub const Node = union(enum) {
     return_stmt: Return,
     list: List,
     dict: Dict,
+    tuple: Tuple,
     subscript: Subscript,
     attribute: Attribute,
     expr_stmt: ExprStmt,
@@ -106,6 +107,10 @@ pub const Node = union(enum) {
     pub const Dict = struct {
         keys: []Node,
         values: []Node,
+    };
+
+    pub const Tuple = struct {
+        elts: []Node,
     };
 
     pub const Subscript = struct {

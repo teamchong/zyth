@@ -68,9 +68,57 @@ fn visitAssign(self: *ZigCodeGenerator, assign: ast.Node.Assign) CodegenError!vo
                         else => {},
                     }
                 },
-                .binop => {
-                    // Binary operation - assume int for now
-                    try self.var_types.put(var_name, "int");
+                .binop => |binop| {
+                    // Detect string concatenation
+                    if (binop.op == .Add) {
+                        const is_string_concat = blk: {
+                            // Check left operand
+                            switch (binop.left.*) {
+                                .name => |left_name| {
+                                    const left_type = self.var_types.get(left_name.id);
+                                    if (left_type != null and std.mem.eql(u8, left_type.?, "string")) {
+                                        break :blk true;
+                                    }
+                                },
+                                .constant => |c| {
+                                    if (c.value == .string) {
+                                        break :blk true;
+                                    }
+                                },
+                                .binop => |left_binop| {
+                                    // Nested binop - if it's also an Add, assume string concat
+                                    if (left_binop.op == .Add) {
+                                        break :blk true;
+                                    }
+                                },
+                                else => {},
+                            }
+                            // Check right operand if left didn't match
+                            switch (binop.right.*) {
+                                .name => |right_name| {
+                                    const right_type = self.var_types.get(right_name.id);
+                                    if (right_type != null and std.mem.eql(u8, right_type.?, "string")) {
+                                        break :blk true;
+                                    }
+                                },
+                                .constant => |c| {
+                                    if (c.value == .string) {
+                                        break :blk true;
+                                    }
+                                },
+                                else => {},
+                            }
+                            break :blk false;
+                        };
+                        if (is_string_concat) {
+                            try self.var_types.put(var_name, "string");
+                        } else {
+                            try self.var_types.put(var_name, "int");
+                        }
+                    } else {
+                        // Other binary operations - assume int
+                        try self.var_types.put(var_name, "int");
+                    }
                 },
                 .name => |source_name| {
                     // Assigning from another variable - copy its type
@@ -86,14 +134,21 @@ fn visitAssign(self: *ZigCodeGenerator, assign: ast.Node.Assign) CodegenError!vo
                 .dict => {
                     try self.var_types.put(var_name, "dict");
                 },
+                .tuple => {
+                    try self.var_types.put(var_name, "tuple");
+                },
                 .call => |call| {
-                    // Check if this is a class instantiation
+                    // Check if this is a class instantiation or method call
                     switch (call.func.*) {
                         .name => |func_name| {
                             if (self.class_names.contains(func_name.id)) {
                                 try self.var_types.put(var_name, "class");
                                 is_class_instance = true;
                             }
+                        },
+                        .attribute => {
+                            // Method call - result is a PyObject that needs special print handling
+                            try self.var_types.put(var_name, "pyobject");
                         },
                         else => {},
                     }
@@ -113,9 +168,9 @@ fn visitAssign(self: *ZigCodeGenerator, assign: ast.Node.Assign) CodegenError!vo
                     try buf.writer(self.allocator).print("{s} {s} = try {s};", .{ var_keyword, var_name, value_result.code });
                     try self.emit(try buf.toOwnedSlice(self.allocator));
 
-                    // Add defer for strings
+                    // Add defer for strings and PyObjects
                     const var_type = self.var_types.get(var_name);
-                    if (var_type != null and std.mem.eql(u8, var_type.?, "string")) {
+                    if (var_type != null and (std.mem.eql(u8, var_type.?, "string") or std.mem.eql(u8, var_type.?, "pyobject"))) {
                         var defer_buf = std.ArrayList(u8){};
                         try defer_buf.writer(self.allocator).print("defer runtime.decref({s}, allocator);", .{var_name});
                         try self.emit(try defer_buf.toOwnedSlice(self.allocator));
@@ -157,6 +212,104 @@ fn visitAssign(self: *ZigCodeGenerator, assign: ast.Node.Assign) CodegenError!vo
                 try buf.writer(self.allocator).print("{s} = {s};", .{ attr_result.code, value_result.code });
             }
             try self.emit(try buf.toOwnedSlice(self.allocator));
+        },
+        .tuple => |targets| {
+            // Handle tuple unpacking: a, b = (1, 2) or a, b = t
+            switch (assign.value.*) {
+                .tuple => |values| {
+                    // Unpacking from tuple literal
+                    if (targets.elts.len != values.elts.len) {
+                        return error.InvalidAssignment;
+                    }
+
+                    // Generate individual assignments for each target-value pair
+                    for (targets.elts, values.elts) |target_node, value_node| {
+                        switch (target_node) {
+                            .name => |name| {
+                                const var_name = name.id;
+
+                                // Determine if this is first assignment
+                                const is_first_assignment = !self.declared_vars.contains(var_name);
+                                if (is_first_assignment) {
+                                    try self.declared_vars.put(var_name, {});
+                                }
+
+                                // Infer type from value
+                                switch (value_node) {
+                                    .constant => |constant| {
+                                        switch (constant.value) {
+                                            .string => try self.var_types.put(var_name, "string"),
+                                            .int => try self.var_types.put(var_name, "int"),
+                                            else => {},
+                                        }
+                                    },
+                                    else => {},
+                                }
+
+                                // Evaluate the individual value
+                                const val_result = try expressions.visitExpr(self, value_node);
+
+                                // Use 'const' for first assignment
+                                const var_keyword = if (self.reassigned_vars.contains(var_name)) "var" else "const";
+
+                                // Generate assignment code
+                                var buf = std.ArrayList(u8){};
+                                if (is_first_assignment) {
+                                    if (val_result.needs_try) {
+                                        try buf.writer(self.allocator).print("{s} {s} = try {s};", .{ var_keyword, var_name, val_result.code });
+                                    } else {
+                                        try buf.writer(self.allocator).print("{s} {s} = {s};", .{ var_keyword, var_name, val_result.code });
+                                    }
+                                } else {
+                                    if (val_result.needs_try) {
+                                        try buf.writer(self.allocator).print("{s} = try {s};", .{ var_name, val_result.code });
+                                    } else {
+                                        try buf.writer(self.allocator).print("{s} = {s};", .{ var_name, val_result.code });
+                                    }
+                                }
+                                try self.emit(try buf.toOwnedSlice(self.allocator));
+                            },
+                            else => return error.UnsupportedTarget,
+                        }
+                    }
+                },
+                .name => {
+                    // Unpacking from tuple variable: a, b = t
+                    const value_result = try expressions.visitExpr(self, assign.value.*);
+
+                    // Generate unpacking code for each target
+                    for (targets.elts, 0..) |target_node, i| {
+                        switch (target_node) {
+                            .name => |name| {
+                                const var_name = name.id;
+
+                                // Determine if this is first assignment
+                                const is_first_assignment = !self.declared_vars.contains(var_name);
+                                if (is_first_assignment) {
+                                    try self.declared_vars.put(var_name, {});
+                                }
+
+                                // Mark as pyobject since we're unpacking from PyObject
+                                try self.var_types.put(var_name, "pyobject");
+
+                                // Use 'const' for first assignment
+                                const var_keyword = if (self.reassigned_vars.contains(var_name)) "var" else "const";
+
+                                // Generate code to extract from tuple
+                                var buf = std.ArrayList(u8){};
+                                if (is_first_assignment) {
+                                    try buf.writer(self.allocator).print("{s} {s} = try runtime.PyTuple.getItem({s}, {d});", .{ var_keyword, var_name, value_result.code, i });
+                                } else {
+                                    try buf.writer(self.allocator).print("{s} = try runtime.PyTuple.getItem({s}, {d});", .{ var_name, value_result.code, i });
+                                }
+                                try self.emit(try buf.toOwnedSlice(self.allocator));
+                            },
+                            else => return error.UnsupportedTarget,
+                        }
+                    }
+                },
+                else => return error.UnsupportedTarget,
+            }
         },
         else => return error.UnsupportedTarget,
     }

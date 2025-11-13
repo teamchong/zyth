@@ -33,6 +33,8 @@ pub fn visitExpr(self: *ZigCodeGenerator, node: ast.Node) CodegenError!ExprResul
 
         .dict => |dict| visitDict(self, dict),
 
+        .tuple => |tuple| visitTuple(self, tuple),
+
         .subscript => |sub| visitSubscript(self, sub),
 
         else => error.UnsupportedExpression,
@@ -268,6 +270,63 @@ fn visitDict(self: *ZigCodeGenerator, dict: ast.Node.Dict) CodegenError!ExprResu
     };
 }
 
+/// Visit a tuple literal expression
+fn visitTuple(self: *ZigCodeGenerator, tuple: ast.Node.Tuple) CodegenError!ExprResult {
+    // Generate code to create a tuple literal
+    // Strategy: Create tuple, then set each element
+    self.needs_runtime = true;
+    self.needs_allocator = true;
+
+    // Unique variable name for the tuple
+    const tuple_var = try std.fmt.allocPrint(self.allocator, "__tuple_{d}", .{self.temp_var_counter});
+    self.temp_var_counter += 1;
+
+    // Emit tuple creation as statement
+    var create_buf = std.ArrayList(u8){};
+    try create_buf.writer(self.allocator).print("const {s} = try runtime.PyTuple.create(allocator, {d});", .{ tuple_var, tuple.elts.len });
+    try self.emit(try create_buf.toOwnedSlice(self.allocator));
+
+    // Set each element
+    for (tuple.elts, 0..) |elt, i| {
+        const elt_result = try visitExpr(self, elt);
+        var set_buf = std.ArrayList(u8){};
+
+        // Check if element needs wrapping (constants need to be wrapped in PyObject)
+        const needs_wrapping = switch (elt) {
+            .constant => |c| switch (c.value) {
+                .int, .float, .bool => true,
+                else => false,
+            },
+            else => false,
+        };
+
+        if (needs_wrapping) {
+            // Wrap constant in appropriate PyObject type
+            const wrapped_code = switch (elt) {
+                .constant => |c| switch (c.value) {
+                    .int => try std.fmt.allocPrint(self.allocator, "try runtime.PyInt.create(allocator, {s})", .{elt_result.code}),
+                    .float => try std.fmt.allocPrint(self.allocator, "try runtime.PyFloat.create(allocator, {s})", .{elt_result.code}),
+                    .bool => try std.fmt.allocPrint(self.allocator, "try runtime.PyBool.create(allocator, {s})", .{elt_result.code}),
+                    else => elt_result.code,
+                },
+                else => elt_result.code,
+            };
+            try set_buf.writer(self.allocator).print("runtime.PyTuple.setItem({s}, {d}, {s});", .{ tuple_var, i, wrapped_code });
+        } else if (elt_result.needs_try) {
+            try set_buf.writer(self.allocator).print("runtime.PyTuple.setItem({s}, {d}, try {s});", .{ tuple_var, i, elt_result.code });
+        } else {
+            try set_buf.writer(self.allocator).print("runtime.PyTuple.setItem({s}, {d}, {s});", .{ tuple_var, i, elt_result.code });
+        }
+        try self.emit(try set_buf.toOwnedSlice(self.allocator));
+    }
+
+    // Return the tuple variable name
+    return ExprResult{
+        .code = tuple_var,
+        .needs_try = false,
+    };
+}
+
 /// Visit a subscript expression (indexing or slicing)
 fn visitSubscript(self: *ZigCodeGenerator, sub: ast.Node.Subscript) CodegenError!ExprResult {
     self.needs_runtime = true;
@@ -303,6 +362,13 @@ fn visitSubscript(self: *ZigCodeGenerator, sub: ast.Node.Subscript) CodegenError
                     try buf.writer(self.allocator).print("runtime.PyString.charAt(allocator, {s}, try {s})", .{ value_result.code, idx_result.code });
                 } else {
                     try buf.writer(self.allocator).print("runtime.PyString.charAt(allocator, {s}, {s})", .{ value_result.code, idx_result.code });
+                }
+            } else if (std.mem.eql(u8, value_type, "tuple")) {
+                // Tuple indexing
+                if (idx_result.needs_try) {
+                    try buf.writer(self.allocator).print("runtime.PyTuple.getItem({s}, @intCast(try {s}))", .{ value_result.code, idx_result.code });
+                } else {
+                    try buf.writer(self.allocator).print("runtime.PyTuple.getItem({s}, @intCast({s}))", .{ value_result.code, idx_result.code });
                 }
             } else if (std.mem.eql(u8, value_type, "dict")) {
                 // Dict indexing - extract string key

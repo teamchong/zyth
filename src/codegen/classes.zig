@@ -186,13 +186,25 @@ pub fn visitMethodCall(self: *ZigCodeGenerator, attr: ast.Node.Attribute, args: 
     } else if (std.mem.eql(u8, method_name, "split")) {
         if (args.len != 1) return error.InvalidArguments;
         const arg_result = try expressions.visitExpr(self,args[0]);
-        try buf.writer(self.allocator).print("runtime.PyString.split(allocator, {s}, {s})", .{ obj_result.code, arg_result.code });
+        const arg_code = if (arg_result.needs_try)
+            try std.fmt.allocPrint(self.allocator, "try {s}", .{arg_result.code})
+        else
+            arg_result.code;
+        try buf.writer(self.allocator).print("runtime.PyString.split(allocator, {s}, {s})", .{ obj_result.code, arg_code });
         return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = true };
     } else if (std.mem.eql(u8, method_name, "replace")) {
         if (args.len != 2) return error.InvalidArguments;
         const arg1_result = try expressions.visitExpr(self,args[0]);
         const arg2_result = try expressions.visitExpr(self,args[1]);
-        try buf.writer(self.allocator).print("runtime.PyString.replace(allocator, {s}, {s}, {s})", .{ obj_result.code, arg1_result.code, arg2_result.code });
+        const arg1_code = if (arg1_result.needs_try)
+            try std.fmt.allocPrint(self.allocator, "try {s}", .{arg1_result.code})
+        else
+            arg1_result.code;
+        const arg2_code = if (arg2_result.needs_try)
+            try std.fmt.allocPrint(self.allocator, "try {s}", .{arg2_result.code})
+        else
+            arg2_result.code;
+        try buf.writer(self.allocator).print("runtime.PyString.replace(allocator, {s}, {s}, {s})", .{ obj_result.code, arg1_code, arg2_code });
         return ExprResult{ .code = try buf.toOwnedSlice(self.allocator), .needs_try = true };
     } else if (std.mem.eql(u8, method_name, "capitalize")) {
         try buf.writer(self.allocator).print("runtime.PyString.capitalize(allocator, {s})", .{obj_result.code});

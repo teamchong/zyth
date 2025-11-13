@@ -90,4 +90,29 @@ pub const PyTuple = struct {
         }
         return false;
     }
+
+    /// Print tuple in Python format: (1, 2, 3)
+    pub fn print(obj: *PyObject) void {
+        std.debug.assert(obj.type_id == .tuple);
+        const data: *PyTuple = @ptrCast(@alignCast(obj.data));
+
+        std.debug.print("(", .{});
+        for (data.items, 0..) |item, i| {
+            switch (item.type_id) {
+                .int => {
+                    const int_data: *runtime.PyInt = @ptrCast(@alignCast(item.data));
+                    std.debug.print("{d}", .{int_data.value});
+                },
+                .string => {
+                    const str_data: *runtime.PyString = @ptrCast(@alignCast(item.data));
+                    std.debug.print("'{s}'", .{str_data.data});
+                },
+                else => std.debug.print("{any}", .{item}),
+            }
+            if (i < data.items.len - 1) {
+                std.debug.print(", ", .{});
+            }
+        }
+        std.debug.print(")", .{});
+    }
 };

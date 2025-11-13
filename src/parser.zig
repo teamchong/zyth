@@ -136,6 +136,47 @@ pub const Parser = struct {
     fn parseExprOrAssign(self: *Parser) ParseError!ast.Node {
         const expr = try self.parseExpression();
 
+        // Check if this is tuple unpacking (comma-separated targets)
+        if (self.check(.Comma)) {
+            // Parse comma-separated targets: a, b, c
+            var targets_list = std.ArrayList(ast.Node){};
+            try targets_list.append(self.allocator, expr);
+
+            while (self.match(.Comma)) {
+                const target = try self.parseExpression();
+                try targets_list.append(self.allocator, target);
+            }
+
+            // Now expect assignment
+            if (self.match(.Eq)) {
+                const value = try self.parseExpression();
+                _ = self.expect(.Newline) catch {};
+
+                // Allocate value on heap
+                const value_ptr = try self.allocator.create(ast.Node);
+                value_ptr.* = value;
+
+                // Create a tuple node for the targets
+                const targets_array = try targets_list.toOwnedSlice(self.allocator);
+                const target_tuple = try self.allocator.create(ast.Node);
+                target_tuple.* = ast.Node{ .tuple = .{ .elts = targets_array } };
+
+                // Wrap the tuple in array (single target)
+                var targets = try self.allocator.alloc(ast.Node, 1);
+                targets[0] = target_tuple.*;
+
+                return ast.Node{
+                    .assign = .{
+                        .targets = targets,
+                        .value = value_ptr,
+                    },
+                };
+            } else {
+                // This is invalid - can't have comma-separated expressions as statement
+                return error.UnexpectedToken;
+            }
+        }
+
         // Check for assignment
         if (self.match(.Eq)) {
             const value = try self.parseExpression();
@@ -968,9 +1009,34 @@ pub const Parser = struct {
                 },
                 .LParen => {
                     _ = self.advance();
-                    const expr = try self.parseExpression();
-                    _ = try self.expect(.RParen);
-                    return expr;
+
+                    // Check for empty tuple ()
+                    if (self.check(.RParen)) {
+                        _ = try self.expect(.RParen);
+                        return ast.Node{ .tuple = .{ .elts = &.{} } };
+                    }
+
+                    const first = try self.parseExpression();
+
+                    // Check if it's a tuple (has comma) or grouped expression
+                    if (self.match(.Comma)) {
+                        // It's a tuple: (1, 2, 3)
+                        var elements = std.ArrayList(ast.Node){};
+                        try elements.append(self.allocator, first);
+
+                        // Parse remaining elements
+                        while (!self.check(.RParen)) {
+                            try elements.append(self.allocator, try self.parseExpression());
+                            if (!self.match(.Comma)) break;
+                        }
+
+                        _ = try self.expect(.RParen);
+                        return ast.Node{ .tuple = .{ .elts = try elements.toOwnedSlice(self.allocator) } };
+                    } else {
+                        // Just a grouped expression: (x + 1)
+                        _ = try self.expect(.RParen);
+                        return first;
+                    }
                 },
                 .LBracket => {
                     return try self.parseList();

@@ -41,12 +41,46 @@ pub fn visitPrintCall(self: *ZigCodeGenerator, args: []ast.Node) CodegenError!Ex
                     };
                 } else if (std.mem.eql(u8, vtype, "string")) {
                     try buf.writer(self.allocator).print("std.debug.print(\"{{s}}\\n\", .{{runtime.PyString.getValue({s})}})", .{arg_result.code});
+                } else if (std.mem.eql(u8, vtype, "tuple")) {
+                    // Emit tuple print as statement
+                    var print_buf = std.ArrayList(u8){};
+                    try print_buf.writer(self.allocator).print("{{ runtime.PyTuple.print({s}); std.debug.print(\"\\n\", .{{}}); }}", .{arg_result.code});
+                    try self.emit(try print_buf.toOwnedSlice(self.allocator));
+                    return ExprResult{
+                        .code = "",
+                        .needs_try = false,
+                    };
                 } else {
                     try buf.writer(self.allocator).print("std.debug.print(\"{{}}\\n\", .{{{s}}})", .{arg_result.code});
                 }
             } else {
                 try buf.writer(self.allocator).print("std.debug.print(\"{{}}\\n\", .{{{s}}})", .{arg_result.code});
             }
+        },
+        .subscript => {
+            // Subscript returns PyObject - may be error union or already unwrapped
+            var print_buf = std.ArrayList(u8){};
+
+            // Generate unique temp var name
+            const temp_var = try std.fmt.allocPrint(self.allocator, "_print_tmp_{d}", .{@intFromPtr(arg_result.code.ptr)});
+
+            // Use 'try' only if needed (list subscripts return error unions, dict subscripts don't)
+            const unwrap = if (arg_result.needs_try) "try " else "";
+
+            try print_buf.writer(self.allocator).print(
+                "{{ const {s} = {s}{s}; " ++
+                "switch ({s}.type_id) {{ " ++
+                ".int => std.debug.print(\"{{}}\\n\", .{{runtime.PyInt.getValue({s})}}), " ++
+                ".string => std.debug.print(\"{{s}}\\n\", .{{runtime.PyString.getValue({s})}}), " ++
+                "else => std.debug.print(\"{{any}}\\n\", .{{{s}}}), " ++
+                "}} }}",
+                .{temp_var, unwrap, arg_result.code, temp_var, temp_var, temp_var, temp_var}
+            );
+            try self.emit(try print_buf.toOwnedSlice(self.allocator));
+            return ExprResult{
+                .code = "",
+                .needs_try = false,
+            };
         },
         else => {
             // For string constants, extract raw string and use directly (no PyObject needed)
@@ -106,6 +140,8 @@ pub fn visitLenCall(self: *ZigCodeGenerator, args: []ast.Node) CodegenError!Expr
                     try buf.writer(self.allocator).print("runtime.PyString.len({s})", .{arg_result.code});
                 } else if (std.mem.eql(u8, vtype, "dict")) {
                     try buf.writer(self.allocator).print("runtime.PyDict.len({s})", .{arg_result.code});
+                } else if (std.mem.eql(u8, vtype, "tuple")) {
+                    try buf.writer(self.allocator).print("runtime.PyTuple.len({s})", .{arg_result.code});
                 } else {
                     try buf.writer(self.allocator).print("runtime.PyList.len({s})", .{arg_result.code});
                 }

@@ -46,6 +46,54 @@ pub fn visitBinOp(self: *ZigCodeGenerator, binop: ast.Node.BinOp) CodegenError!E
 
     var buf = std.ArrayList(u8){};
 
+    // Check for string concatenation (string + string)
+    if (binop.op == .Add) {
+        const is_left_string = blk: {
+            switch (binop.left.*) {
+                .name => |name| {
+                    const var_type = self.var_types.get(name.id);
+                    break :blk var_type != null and std.mem.eql(u8, var_type.?, "string");
+                },
+                .constant => |c| {
+                    break :blk c.value == .string;
+                },
+                else => break :blk false,
+            }
+        };
+
+        const is_right_string = blk: {
+            switch (binop.right.*) {
+                .name => |name| {
+                    const var_type = self.var_types.get(name.id);
+                    break :blk var_type != null and std.mem.eql(u8, var_type.?, "string");
+                },
+                .constant => |c| {
+                    break :blk c.value == .string;
+                },
+                else => break :blk false,
+            }
+        };
+
+        if (is_left_string or is_right_string) {
+            // String concatenation - use runtime function
+            const left_code = if (left_result.needs_try)
+                try std.fmt.allocPrint(self.allocator, "try {s}", .{left_result.code})
+            else
+                left_result.code;
+            const right_code = if (right_result.needs_try)
+                try std.fmt.allocPrint(self.allocator, "try {s}", .{right_result.code})
+            else
+                right_result.code;
+
+            try buf.writer(self.allocator).print("runtime.PyString.concat(allocator, {s}, {s})", .{ left_code, right_code });
+
+            return ExprResult{
+                .code = try buf.toOwnedSlice(self.allocator),
+                .needs_try = true,
+            };
+        }
+    }
+
     // Handle operators that need special Zig functions
     switch (binop.op) {
         .FloorDiv => {

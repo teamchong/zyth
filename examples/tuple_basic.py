@@ -1,9 +1,7 @@
-# Basic tuple creation and access
-pair = (1, 2)
-print(pair[0])
-print(pair[1])
-
-triple = (10, 20, 30)
-print(triple[0])
-print(triple[1])
-print(triple[2])
+# Tuple basics - creation, indexing, printing
+t = (1, 2, 3)
+print(t)
+print(t[0])
+print(t[1])
+print(t[2])
+print(len(t))
