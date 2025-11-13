@@ -70,6 +70,7 @@ fn compileFile(allocator: std.mem.Allocator, input_path: []const u8, output_path
     defer allocator.free(zig_code);
 
     // Determine output path
+    const bin_path_allocated = output_path == null;
     const bin_path = output_path orelse blk: {
         const basename = std.fs.path.basename(input_path);
         const name_no_ext = if (std.mem.lastIndexOf(u8, basename, ".")) |idx|
@@ -85,7 +86,7 @@ fn compileFile(allocator: std.mem.Allocator, input_path: []const u8, output_path
         const path = try std.fmt.allocPrint(allocator, "bin/{s}", .{name_no_ext});
         break :blk path;
     };
-    defer if (output_path == null) allocator.free(bin_path);
+    defer if (bin_path_allocated) allocator.free(bin_path);
 
     // Compile Zig code to binary
     std.debug.print("Compiling to binary...\n", .{});
@@ -96,10 +97,13 @@ fn compileFile(allocator: std.mem.Allocator, input_path: []const u8, output_path
     // Run if mode is "run"
     if (std.mem.eql(u8, mode, "run")) {
         std.debug.print("\n", .{});
-        _ = try std.process.Child.run(.{
+        const result = try std.process.Child.run(.{
             .allocator = allocator,
             .argv = &[_][]const u8{bin_path},
         });
+        // Free stdout/stderr from subprocess
+        defer allocator.free(result.stdout);
+        defer allocator.free(result.stderr);
     }
 }
 

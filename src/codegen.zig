@@ -110,7 +110,7 @@ pub const ZigCodeGenerator = struct {
         self.tuple_element_types.deinit();
         self.function_names.deinit();
         self.class_names.deinit();
-        self.arena.deinit(); // Free arena last, after all other structures
+        self.arena.deinit(); // Free all temp allocations
         self.allocator.destroy(self);
     }
 
