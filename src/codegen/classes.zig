@@ -22,7 +22,12 @@ pub fn visitClassInstantiation(self: *ZigCodeGenerator, class_name: []const u8, 
     for (args, 0..) |arg, i| {
         if (i > 0) try buf.writer(self.temp_allocator).writeAll(", ");
         const arg_result = try expressions.visitExpr(self,arg);
-        try buf.writer(self.temp_allocator).writeAll(arg_result.code);
+        // Add 'try' if the argument needs it (e.g., PyString.create)
+        if (arg_result.needs_try) {
+            try buf.writer(self.temp_allocator).print("try {s}", .{arg_result.code});
+        } else {
+            try buf.writer(self.temp_allocator).writeAll(arg_result.code);
+        }
     }
     try buf.writer(self.temp_allocator).writeAll(")");
     return ExprResult{
@@ -81,6 +86,10 @@ pub fn visitClassDef(self: *ZigCodeGenerator, class: ast.Node.ClassDef) CodegenE
     }
 
     if (init_method) |init_func| {
+        // First pass: determine field types from initializers
+        var field_types = std.StringHashMap([]const u8).init(self.allocator);
+        defer field_types.deinit();
+
         for (init_func.body) |stmt| {
             switch (stmt) {
                 .assign => |assign| {
@@ -90,8 +99,62 @@ pub fn visitClassDef(self: *ZigCodeGenerator, class: ast.Node.ClassDef) CodegenE
                                 switch (attr.value.*) {
                                     .name => |name| {
                                         if (std.mem.eql(u8, name.id, "self")) {
+                                            // Infer type from value
+                                            const field_type = blk: {
+                                                switch (assign.value.*) {
+                                                    .name => |val_name| {
+                                                        // Look up parameter type from function args
+                                                        for (init_func.args) |arg| {
+                                                            if (std.mem.eql(u8, arg.name, val_name.id)) {
+                                                                if (arg.type_annotation) |type_annot| {
+                                                                    if (std.mem.eql(u8, type_annot, "str")) {
+                                                                        break :blk "*runtime.PyObject";
+                                                                    } else if (std.mem.eql(u8, type_annot, "int")) {
+                                                                        break :blk "i64";
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        break :blk "i64"; // Default
+                                                    },
+                                                    .constant => |c| {
+                                                        if (c.value == .string) {
+                                                            break :blk "*runtime.PyObject";
+                                                        } else if (c.value == .int) {
+                                                            break :blk "i64";
+                                                        }
+                                                        break :blk "i64";
+                                                    },
+                                                    else => break :blk "i64",
+                                                }
+                                            };
+                                            try field_types.put(attr.attr, field_type);
+                                        }
+                                    },
+                                    else => {},
+                                }
+                            },
+                            else => {},
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+
+        // Second pass: emit field declarations with correct types
+        for (init_func.body) |stmt| {
+            switch (stmt) {
+                .assign => |assign| {
+                    for (assign.targets) |target| {
+                        switch (target) {
+                            .attribute => |attr| {
+                                switch (attr.value.*) {
+                                    .name => |name| {
+                                        if (std.mem.eql(u8, name.id, "self")) {
+                                            const field_type = field_types.get(attr.attr) orelse "i64";
                                             var field_buf = std.ArrayList(u8){};
-                                            try field_buf.writer(self.temp_allocator).print("{s}: i64,", .{attr.attr});
+                                            try field_buf.writer(self.temp_allocator).print("{s}: {s},", .{attr.attr, field_type});
                                             try self.emitOwned(try field_buf.toOwnedSlice(self.temp_allocator));
                                         }
                                     },
@@ -113,7 +176,19 @@ pub fn visitClassDef(self: *ZigCodeGenerator, class: ast.Node.ClassDef) CodegenE
         for (init_func.args, 0..) |arg, i| {
             if (std.mem.eql(u8, arg.name, "self")) continue;
             if (i > 1) try buf.writer(self.temp_allocator).writeAll(", ");
-            try buf.writer(self.temp_allocator).print("{s}: i64", .{arg.name});
+
+            // Infer parameter type from annotation
+            const param_type = blk: {
+                if (arg.type_annotation) |type_annot| {
+                    if (std.mem.eql(u8, type_annot, "str")) {
+                        break :blk "*runtime.PyObject";
+                    } else if (std.mem.eql(u8, type_annot, "int")) {
+                        break :blk "i64";
+                    }
+                }
+                break :blk "i64"; // Default
+            };
+            try buf.writer(self.temp_allocator).print("{s}: {s}", .{arg.name, param_type});
         }
 
         try buf.writer(self.temp_allocator).print(") {s} {{", .{class.name});

@@ -133,6 +133,9 @@ pub fn printList(obj: *PyObject) void {
                 const str_data: *PyString = @ptrCast(@alignCast(item.data));
                 std.debug.print("'{s}'", .{str_data.data});
             },
+            .tuple => {
+                PyTuple.print(item);
+            },
             else => {
                 std.debug.print("{*}", .{item});
             },

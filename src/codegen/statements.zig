@@ -41,6 +41,7 @@ pub fn visitNode(self: *ZigCodeGenerator, node: ast.Node) CodegenError!void {
         .return_stmt => |ret| try visitReturn(self, ret),
         .import_stmt => |import_node| try visitImport(self, import_node),
         .import_from => |import_from| try visitImportFrom(self, import_from),
+        .assert_stmt => |assert_node| try visitAssert(self, assert_node),
         else => {}, // Ignore other node types for now
     }
 }
@@ -157,6 +158,12 @@ fn visitAssign(self: *ZigCodeGenerator, assign: ast.Node.Assign) CodegenError!vo
                                 try self.var_types.put(var_name, func_name.id);
                                 is_class_instance = true;
                                 class_name = func_name.id;
+                            } else if (std.mem.eql(u8, func_name.id, "zip")) {
+                                // zip() returns a list
+                                try self.var_types.put(var_name, "list");
+                            } else if (std.mem.eql(u8, func_name.id, "type")) {
+                                // type() returns a string
+                                try self.var_types.put(var_name, "string");
                             } else if (self.function_return_types.get(func_name.id)) |return_type| {
                                 // User-defined function - track return type
                                 if (std.mem.eql(u8, return_type, "*runtime.PyObject")) {
@@ -184,9 +191,9 @@ fn visitAssign(self: *ZigCodeGenerator, assign: ast.Node.Assign) CodegenError!vo
                             };
 
                             // Methods that return primitive integers (not PyObjects)
-                            // Note: find(), count() now return PyInt objects, not primitives
                             const int_methods = [_][]const u8{
-                                "index"  // List.index() still returns primitive i64
+                                "index",  // List.index() returns primitive i64
+                                "count"   // List.count() returns primitive i64
                             };
 
                             // Check if it's a string method
@@ -608,5 +615,57 @@ fn visitImportFrom(self: *ZigCodeGenerator, import_from: ast.Node.ImportFrom) Co
         );
         try self.emitOwned(try buf.toOwnedSlice(self.temp_allocator));
     }
+}
+
+/// Generate code for assert statement
+fn visitAssert(self: *ZigCodeGenerator, assert_node: ast.Node.Assert) CodegenError!void {
+    // Evaluate the condition
+    const condition_result = try expressions.visitExpr(self, assert_node.condition.*);
+
+    var buf = std.ArrayList(u8){};
+
+    // Generate if (!condition) { error }
+    try buf.writer(self.temp_allocator).print("if (!({s})) {{", .{condition_result.code});
+    try self.emitOwned(try buf.toOwnedSlice(self.temp_allocator));
+    self.indent();
+
+    // Print error message
+    if (assert_node.msg) |msg| {
+        const msg_result = try expressions.visitExpr(self, msg.*);
+
+        // Check if message is a string constant
+        const is_string_const = switch (msg.*) {
+            .constant => |c| c.value == .string,
+            else => false,
+        };
+
+        var print_buf = std.ArrayList(u8){};
+        if (is_string_const) {
+            // Extract raw string from PyString.create() call
+            const start_quote = std.mem.indexOf(u8, msg_result.code, "\"");
+            if (start_quote) |start| {
+                const end_quote = std.mem.lastIndexOf(u8, msg_result.code, "\"");
+                if (end_quote) |end| {
+                    const raw_string = msg_result.code[start..end + 1];
+                    try print_buf.writer(self.temp_allocator).print("std.debug.print(\"AssertionError: {{s}}\\n\", .{{{s}}});", .{raw_string});
+                } else {
+                    try print_buf.writer(self.temp_allocator).writeAll("std.debug.print(\"AssertionError\\n\", .{});");
+                }
+            } else {
+                try print_buf.writer(self.temp_allocator).writeAll("std.debug.print(\"AssertionError\\n\", .{});");
+            }
+        } else {
+            try print_buf.writer(self.temp_allocator).writeAll("std.debug.print(\"AssertionError\\n\", .{});");
+        }
+        try self.emitOwned(try print_buf.toOwnedSlice(self.temp_allocator));
+    } else {
+        try self.emit("std.debug.print(\"AssertionError\\n\", .{});");
+    }
+
+    // Return error
+    try self.emit("return error.AssertionError;");
+
+    self.dedent();
+    try self.emit("}");
 }
 

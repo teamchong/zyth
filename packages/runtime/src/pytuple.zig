@@ -31,6 +31,18 @@ pub const PyTuple = struct {
         return obj;
     }
 
+    /// Create tuple from array of PyObjects (takes ownership of items)
+    pub fn createFromArray(allocator: std.mem.Allocator, items: []const *PyObject) !*PyObject {
+        const obj = try create(allocator, items.len);
+        const data: *PyTuple = @ptrCast(@alignCast(obj.data));
+
+        for (items, 0..) |item, i| {
+            data.items[i] = item;
+        }
+
+        return obj;
+    }
+
     pub fn fromSlice(allocator: std.mem.Allocator, values: []const PyObject.Value) !*PyObject {
         const obj = try create(allocator, values.len);
         const data: *PyTuple = @ptrCast(@alignCast(obj.data));

@@ -127,6 +127,7 @@ pub const Parser = struct {
                 .Return => return try self.parseReturn(),
                 .Import => return try self.parseImport(),
                 .From => return try self.parseImportFrom(),
+                .Assert => return try self.parseAssert(),
                 else => {
                     // Could be assignment or expression statement
                     return try self.parseExprOrAssign();
@@ -260,20 +261,19 @@ pub const Parser = struct {
         while (!self.match(.RParen)) {
             const arg_name = try self.expect(.Ident);
 
-            // Skip type annotation if present (e.g., : int)
+            // Parse type annotation if present (e.g., : int, : str)
+            var type_annotation: ?[]const u8 = null;
             if (self.match(.Colon)) {
-                // Skip the type - just consume tokens until comma or rparen
-                while (self.current < self.tokens.len and
-                    self.tokens[self.current].type != .Comma and
-                    self.tokens[self.current].type != .RParen)
-                {
+                // Next token should be the type name
+                if (self.current < self.tokens.len and self.tokens[self.current].type == .Ident) {
+                    type_annotation = self.tokens[self.current].lexeme;
                     self.current += 1;
                 }
             }
 
             try args.append(self.allocator, .{
                 .name = arg_name.lexeme,
-                .type_annotation = null,
+                .type_annotation = type_annotation,
             });
 
             if (!self.match(.Comma)) {
@@ -494,6 +494,34 @@ pub const Parser = struct {
         return ast.Node{
             .return_stmt = .{
                 .value = value_ptr,
+            },
+        };
+    }
+
+    /// Parse assert statement: assert condition or assert condition, message
+    fn parseAssert(self: *Parser) ParseError!ast.Node {
+        _ = try self.expect(.Assert);
+
+        // Parse the condition
+        const condition = try self.parseExpression();
+        const condition_ptr = try self.allocator.create(ast.Node);
+        condition_ptr.* = condition;
+
+        var msg_ptr: ?*ast.Node = null;
+
+        // Check for optional message after comma
+        if (self.match(.Comma)) {
+            const msg = try self.parseExpression();
+            msg_ptr = try self.allocator.create(ast.Node);
+            msg_ptr.?.* = msg;
+        }
+
+        _ = self.expect(.Newline) catch {};
+
+        return ast.Node{
+            .assert_stmt = .{
+                .condition = condition_ptr,
+                .msg = msg_ptr,
             },
         };
     }
@@ -918,30 +946,74 @@ pub const Parser = struct {
                 const node_ptr = try self.allocator.create(ast.Node);
                 node_ptr.* = node;
 
-                // Check if it starts with colon (e.g., [:5])
+                // Check if it starts with colon (e.g., [:5] or [::2])
                 if (self.check(.Colon)) {
                     _ = self.advance();
-                    const upper = if (!self.check(.RBracket)) try self.parseExpression() else null;
-                    _ = try self.expect(.RBracket);
 
-                    const upper_ptr = if (upper) |u| blk: {
-                        const ptr = try self.allocator.create(ast.Node);
-                        ptr.* = u;
-                        break :blk ptr;
-                    } else null;
+                    // Check for second colon: [::step]
+                    if (self.check(.Colon)) {
+                        _ = self.advance();
+                        const step = if (!self.check(.RBracket)) try self.parseExpression() else null;
+                        _ = try self.expect(.RBracket);
 
-                    node = ast.Node{
-                        .subscript = .{
-                            .value = node_ptr,
-                            .slice = .{
+                        const step_ptr = if (step) |s| blk: {
+                            const ptr = try self.allocator.create(ast.Node);
+                            ptr.* = s;
+                            break :blk ptr;
+                        } else null;
+
+                        node = ast.Node{
+                            .subscript = .{
+                                .value = node_ptr,
                                 .slice = .{
-                                    .lower = null,
-                                    .upper = upper_ptr,
-                                    .step = null,
+                                    .slice = .{
+                                        .lower = null,
+                                        .upper = null,
+                                        .step = step_ptr,
+                                    },
                                 },
                             },
-                        },
-                    };
+                        };
+                    } else {
+                        // [:upper] or [:upper:step]
+                        const upper = if (!self.check(.RBracket) and !self.check(.Colon)) try self.parseExpression() else null;
+
+                        // Check for step: [:upper:step]
+                        const step = if (self.match(.Colon)) blk: {
+                            if (!self.check(.RBracket)) {
+                                break :blk try self.parseExpression();
+                            } else {
+                                break :blk null;
+                            }
+                        } else null;
+
+                        _ = try self.expect(.RBracket);
+
+                        const upper_ptr = if (upper) |u| blk: {
+                            const ptr = try self.allocator.create(ast.Node);
+                            ptr.* = u;
+                            break :blk ptr;
+                        } else null;
+
+                        const step_ptr = if (step) |s| blk: {
+                            const ptr = try self.allocator.create(ast.Node);
+                            ptr.* = s;
+                            break :blk ptr;
+                        } else null;
+
+                        node = ast.Node{
+                            .subscript = .{
+                                .value = node_ptr,
+                                .slice = .{
+                                    .slice = .{
+                                        .lower = null,
+                                        .upper = upper_ptr,
+                                        .step = step_ptr,
+                                    },
+                                },
+                            },
+                        };
+                    }
                 } else {
                     const lower = try self.parseExpression();
 

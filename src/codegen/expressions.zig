@@ -655,6 +655,12 @@ pub fn visitCall(self: *ZigCodeGenerator, call: ast.Node.Call) CodegenError!Expr
                 return builtins.visitAnyCall(self, call.args);
             } else if (std.mem.eql(u8, func_name.id, "http_get")) {
                 return builtins.visitHttpGetCall(self, call.args);
+            } else if (std.mem.eql(u8, func_name.id, "zip")) {
+                return builtins.visitZipCall(self, call.args);
+            } else if (std.mem.eql(u8, func_name.id, "isinstance")) {
+                return builtins.visitIsInstanceCall(self, call.args);
+            } else if (std.mem.eql(u8, func_name.id, "type")) {
+                return builtins.visitTypeCall(self, call.args);
             } else {
                 // Check if this is a class instantiation
                 if (self.class_names.contains(func_name.id)) {

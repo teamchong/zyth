@@ -67,6 +67,32 @@ pub fn visitPrintCall(self: *ZigCodeGenerator, args: []ast.Node) CodegenError!Ex
                 try buf.writer(self.temp_allocator).print("std.debug.print(\"{{}}\\n\", .{{{s}}})", .{arg_result.code});
             }
         },
+        .attribute => {
+            // Attribute access (e.g., self.name) - need to determine type from the class field
+            // For now, generate runtime type check since we don't track field types at this point
+            var print_buf = std.ArrayList(u8){};
+
+            // Extract to temp var and use runtime type checking
+            const temp_var = try std.fmt.allocPrint(self.allocator, "_print_attr_{d}", .{@intFromPtr(arg_result.code.ptr)});
+
+            try print_buf.writer(self.temp_allocator).print(
+                "{{ const {s} = {s}; " ++
+                "if (@TypeOf({s}) == i64) {{ " ++
+                "std.debug.print(\"{{}}\\n\", .{{{s}}}); " ++
+                "}} else if (@TypeOf({s}) == *runtime.PyObject) {{ " ++
+                "if ({s}.type_id == .int) {{ std.debug.print(\"{{}}\\n\", .{{runtime.PyInt.getValue({s})}}); }} " ++
+                "else if ({s}.type_id == .string) {{ std.debug.print(\"{{s}}\\n\", .{{runtime.PyString.getValue({s})}}); }} " ++
+                "else if ({s}.type_id == .list) {{ runtime.printList({s}); std.debug.print(\"\\n\", .{{}}); }} " ++
+                "else {{ std.debug.print(\"{{any}}\\n\", .{{{s}}}); }} " ++
+                "}} else {{ std.debug.print(\"{{any}}\\n\", .{{{s}}}); }} }}",
+                .{temp_var, arg_result.code, temp_var, temp_var, temp_var, temp_var, temp_var, temp_var, temp_var, temp_var, temp_var, temp_var, temp_var}
+            );
+            try self.emitOwned(try print_buf.toOwnedSlice(self.temp_allocator));
+            return ExprResult{
+                .code = "",
+                .needs_try = false,
+            };
+        },
         .subscript => {
             // Subscript returns PyObject - may be error union or already unwrapped
             var print_buf = std.ArrayList(u8){};
@@ -106,7 +132,7 @@ pub fn visitPrintCall(self: *ZigCodeGenerator, args: []ast.Node) CodegenError!Ex
                         }
 
                         // Functions that return primitives, not PyObjects
-                        const primitive_funcs = [_][]const u8{"len", "abs", "round", "min", "max", "sum"};
+                        const primitive_funcs = [_][]const u8{"len", "abs", "round", "min", "max", "sum", "isinstance"};
                         for (primitive_funcs) |pf| {
                             if (std.mem.eql(u8, func_name.id, pf)) {
                                 break :blk true;
@@ -408,5 +434,140 @@ pub fn visitHttpGetCall(self: *ZigCodeGenerator, args: []ast.Node) CodegenError!
     return ExprResult{
         .code = try buf.toOwnedSlice(self.temp_allocator),
         .needs_try = true, // HTTP can fail
+    };
+}
+
+/// Handles Python's zip() built-in
+/// zip([1,2], ['a','b']) returns [(1,'a'), (2,'b')]
+pub fn visitZipCall(self: *ZigCodeGenerator, args: []ast.Node) CodegenError!ExprResult {
+    if (args.len < 2) return error.InvalidZipArgs;
+
+    self.needs_runtime = true;
+
+    // Generate unique variable names
+    const result_var = try std.fmt.allocPrint(self.allocator, "_zip_result_{d}", .{self.temp_var_counter});
+    self.temp_var_counter += 1;
+
+    // Evaluate all iterable arguments
+    var list_vars = std.ArrayList([]const u8){};
+    defer list_vars.deinit(self.temp_allocator);
+
+    for (args) |arg| {
+        const arg_result = try expressions.visitExpr(self, arg);
+        try list_vars.append(self.temp_allocator, arg_result.code);
+    }
+
+    // Generate code block for zip operation
+    var buf = std.ArrayList(u8){};
+    try buf.writer(self.temp_allocator).writeAll("blk: {\n");
+
+    // Create result list
+    try buf.writer(self.temp_allocator).print("const {s} = try runtime.PyList.create(allocator);\n", .{result_var});
+
+    // Find minimum length
+    try buf.writer(self.temp_allocator).writeAll("const min_len = @min(");
+    for (list_vars.items, 0..) |list_var, i| {
+        if (i > 0) try buf.writer(self.temp_allocator).writeAll(", ");
+        try buf.writer(self.temp_allocator).print("runtime.PyList.len({s})", .{list_var});
+    }
+    try buf.writer(self.temp_allocator).writeAll(");\n");
+
+    // Loop and create tuples
+    try buf.writer(self.temp_allocator).writeAll("var i: usize = 0;\nwhile (i < min_len) : (i += 1) {\n");
+
+    // Get items from each list
+    for (list_vars.items, 0..) |list_var, idx| {
+        const item_var = try std.fmt.allocPrint(self.temp_allocator, "item{d}", .{idx});
+        try buf.writer(self.temp_allocator).print("const {s} = try runtime.PyList.get({s}, @intCast(i));\n", .{item_var, list_var});
+        try buf.writer(self.temp_allocator).print("runtime.incref({s});\n", .{item_var});
+    }
+
+    // Create tuple with all items
+    try buf.writer(self.temp_allocator).writeAll("const tuple_items = [_]*runtime.PyObject{");
+    for (0..list_vars.items.len) |idx| {
+        if (idx > 0) try buf.writer(self.temp_allocator).writeAll(", ");
+        try buf.writer(self.temp_allocator).print("item{d}", .{idx});
+    }
+    try buf.writer(self.temp_allocator).writeAll("};\n");
+    try buf.writer(self.temp_allocator).print("const tuple = try runtime.PyTuple.createFromArray(allocator, &tuple_items);\n", .{});
+    try buf.writer(self.temp_allocator).print("try runtime.PyList.append({s}, tuple);\n", .{result_var});
+
+    try buf.writer(self.temp_allocator).writeAll("}\n");
+    try buf.writer(self.temp_allocator).print("break :blk {s};\n", .{result_var});
+    try buf.writer(self.temp_allocator).writeAll("}");
+
+    return ExprResult{
+        .code = try buf.toOwnedSlice(self.temp_allocator),
+        .needs_try = false,
+        .needs_decref = true,
+    };
+}
+
+/// Handles Python's isinstance() built-in
+/// isinstance(obj, type) checks if obj is of given type
+pub fn visitIsInstanceCall(self: *ZigCodeGenerator, args: []ast.Node) CodegenError!ExprResult {
+    if (args.len != 2) return error.InvalidArguments;
+
+    const obj_result = try expressions.visitExpr(self, args[0]);
+    const type_arg = args[1];
+
+    // Get the type name
+    const type_name = switch (type_arg) {
+        .name => |name| name.id,
+        else => return error.InvalidArguments,
+    };
+
+    var buf = std.ArrayList(u8){};
+
+    // Map Python type names to runtime type_id
+    if (std.mem.eql(u8, type_name, "int")) {
+        try buf.writer(self.temp_allocator).print("@intFromBool({s}.type_id == .int)", .{obj_result.code});
+    } else if (std.mem.eql(u8, type_name, "str")) {
+        try buf.writer(self.temp_allocator).print("@intFromBool({s}.type_id == .string)", .{obj_result.code});
+    } else if (std.mem.eql(u8, type_name, "list")) {
+        try buf.writer(self.temp_allocator).print("@intFromBool({s}.type_id == .list)", .{obj_result.code});
+    } else if (std.mem.eql(u8, type_name, "dict")) {
+        try buf.writer(self.temp_allocator).print("@intFromBool({s}.type_id == .dict)", .{obj_result.code});
+    } else if (std.mem.eql(u8, type_name, "tuple")) {
+        try buf.writer(self.temp_allocator).print("@intFromBool({s}.type_id == .tuple)", .{obj_result.code});
+    } else {
+        // Unknown type - return false
+        try buf.writer(self.temp_allocator).writeAll("@as(i64, 0)");
+    }
+
+    return ExprResult{
+        .code = try buf.toOwnedSlice(self.temp_allocator),
+        .needs_try = false,
+    };
+}
+
+/// Handles Python's type() built-in
+/// type(obj) returns type name as string
+pub fn visitTypeCall(self: *ZigCodeGenerator, args: []ast.Node) CodegenError!ExprResult {
+    if (args.len != 1) return error.InvalidArguments;
+
+    self.needs_runtime = true;
+
+    const obj_result = try expressions.visitExpr(self, args[0]);
+
+    var buf = std.ArrayList(u8){};
+
+    // Generate switch expression to return type name
+    try buf.writer(self.temp_allocator).print(
+        "blk: {{ const type_str = switch ({s}.type_id) {{ " ++
+        ".int => \"int\", " ++
+        ".string => \"str\", " ++
+        ".list => \"list\", " ++
+        ".dict => \"dict\", " ++
+        ".tuple => \"tuple\", " ++
+        "else => \"object\", " ++
+        "}}; break :blk try runtime.PyString.create(allocator, type_str); }}",
+        .{obj_result.code}
+    );
+
+    return ExprResult{
+        .code = try buf.toOwnedSlice(self.temp_allocator),
+        .needs_try = false,
+        .needs_decref = true,
     };
 }

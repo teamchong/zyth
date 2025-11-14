@@ -28,6 +28,7 @@ pub const Node = union(enum) {
     await_expr: AwaitExpr,
     import_stmt: Import,
     import_from: ImportFrom,
+    assert_stmt: Assert,
 
     pub const Module = struct {
         body: []Node,
@@ -172,6 +173,12 @@ pub const Node = union(enum) {
         module: []const u8, // "numpy"
         names: [][]const u8, // ["array", "zeros"]
         asnames: []?[]const u8, // [null, null] or ["arr", null]
+    };
+
+    /// Assert statement: assert condition or assert condition, message
+    pub const Assert = struct {
+        condition: *Node,
+        msg: ?*Node,
     };
 
     /// Recursively free all allocations in the AST
@@ -324,6 +331,14 @@ pub const Node = union(enum) {
             .import_from => |i| {
                 allocator.free(i.names);
                 allocator.free(i.asnames);
+            },
+            .assert_stmt => |a| {
+                a.condition.deinit(allocator);
+                allocator.destroy(a.condition);
+                if (a.msg) |msg| {
+                    msg.deinit(allocator);
+                    allocator.destroy(msg);
+                }
             },
             // Leaf nodes need no cleanup
             .name, .constant => {},
