@@ -140,14 +140,14 @@ fn compileFile(allocator: std.mem.Allocator, opts: CompileOptions) !void {
     if (!should_compile) {
         // Output is up-to-date, skip compilation
         if (std.mem.eql(u8, opts.mode, "run")) {
+            std.debug.print("\n", .{});
             if (opts.binary) {
                 // Run binary directly
                 var child = std.process.Child.init(&[_][]const u8{bin_path}, allocator);
                 _ = try child.spawnAndWait();
             } else {
-                // .so files cannot be executed directly
-                std.debug.print("✓ Shared library up-to-date: {s}\n", .{bin_path});
-                std.debug.print("To run, use: pyx --binary {s}\n", .{opts.input_file});
+                // Load and run shared library
+                try runSharedLib(allocator, bin_path);
             }
         } else {
             std.debug.print("✓ Output up-to-date: {s}\n", .{bin_path});
@@ -171,7 +171,8 @@ fn compileFile(allocator: std.mem.Allocator, opts: CompileOptions) !void {
 
     // PHASE 3: Codegen - Generate Zig code
     std.debug.print("Generating Zig code...\n", .{});
-    const zig_code = try codegen.generate(allocator, tree);
+    const is_shared_lib = !opts.binary;
+    const zig_code = try codegen.generate(allocator, tree, is_shared_lib);
     defer allocator.free(zig_code);
 
     // Compile Zig code
@@ -191,17 +192,52 @@ fn compileFile(allocator: std.mem.Allocator, opts: CompileOptions) !void {
 
     // Run if mode is "run"
     if (std.mem.eql(u8, opts.mode, "run")) {
+        std.debug.print("\n", .{});
         if (opts.binary) {
-            std.debug.print("\n", .{});
             // Run binary directly
             var child = std.process.Child.init(&[_][]const u8{bin_path}, allocator);
             _ = try child.spawnAndWait();
         } else {
-            // .so files cannot be executed directly
-            std.debug.print("\n✓ Shared library compiled: {s}\n", .{bin_path});
-            std.debug.print("To run, use: pyx --binary {s}\n", .{opts.input_file});
-            std.debug.print("(Shared library runner coming in next version)\n", .{});
+            // Load and run shared library
+            try runSharedLib(allocator, bin_path);
         }
+    }
+}
+
+/// Load and execute a shared library (.so/.dylib)
+fn runSharedLib(allocator: std.mem.Allocator, lib_path: []const u8) !void {
+    // Get absolute path for dlopen (need null-terminated string)
+    const abs_path = try std.fs.cwd().realpathAlloc(allocator, lib_path);
+    defer allocator.free(abs_path);
+
+    // Create null-terminated version for dlopen
+    const abs_path_z = try allocator.dupeZ(u8, abs_path);
+    defer allocator.free(abs_path_z);
+
+    // Load the shared library (LAZY = deferred binding)
+    const handle = std.c.dlopen(abs_path_z.ptr, .{ .LAZY = true }) orelse {
+        const err = std.c.dlerror();
+        const err_str = if (err) |e| std.mem.span(e) else "unknown error";
+        std.debug.print("Failed to load library: {s}\n", .{err_str});
+        return error.DlopenFailed;
+    };
+    defer _ = std.c.dlclose(handle);
+
+    // Find the pyx_main function
+    const pyx_main = std.c.dlsym(handle, "pyx_main") orelse {
+        const err = std.c.dlerror();
+        const err_str = if (err) |e| std.mem.span(e) else "pyx_main not found";
+        std.debug.print("Failed to find pyx_main: {s}\n", .{err_str});
+        return error.DlsymFailed;
+    };
+
+    // Cast to function pointer and call
+    const main_fn: *const fn () callconv(.c) c_int = @ptrCast(@alignCast(pyx_main));
+    const result = main_fn();
+
+    if (result != 0) {
+        std.debug.print("pyx_main returned non-zero: {d}\n", .{result});
+        return error.MainFailed;
     }
 }
 

@@ -34,9 +34,9 @@ pub const CodegenError = error{
 };
 
 /// Generate Zig code from AST
-pub fn generate(allocator: std.mem.Allocator, tree: ast.Node) ![]const u8 {
+pub fn generate(allocator: std.mem.Allocator, tree: ast.Node, is_shared_lib: bool) ![]const u8 {
     // Initialize code generator
-    var generator = try ZigCodeGenerator.init(allocator);
+    var generator = try ZigCodeGenerator.init(allocator, is_shared_lib);
     defer generator.deinit();
 
     // Generate code from AST
@@ -77,8 +77,9 @@ pub const ZigCodeGenerator = struct {
     needs_allocator: bool,
     has_async: bool,
     temp_var_counter: usize,
+    is_shared_lib: bool, // Generate for shared library (.so) or binary
 
-    pub fn init(allocator: std.mem.Allocator) !*ZigCodeGenerator {
+    pub fn init(allocator: std.mem.Allocator, is_shared_lib: bool) !*ZigCodeGenerator {
         const self = try allocator.create(ZigCodeGenerator);
         const arena = std.heap.ArenaAllocator.init(allocator);
         self.* = ZigCodeGenerator{
@@ -99,6 +100,7 @@ pub const ZigCodeGenerator = struct {
             .needs_allocator = false,
             .has_async = false,
             .temp_var_counter = 0,
+            .is_shared_lib = is_shared_lib,
         };
         // Set temp_allocator after arena is moved into struct
         self.temp_allocator = self.arena.allocator();
@@ -282,7 +284,13 @@ pub const ZigCodeGenerator = struct {
         }
 
         // Phase 5: Generate main function
-        try self.emit("pub fn main() !void {");
+        // For shared libraries: export pyx_main() for dlsym
+        // For binaries: regular main()
+        if (self.is_shared_lib) {
+            try self.emit("pub export fn pyx_main() callconv(.c) c_int {");
+        } else {
+            try self.emit("pub fn main() !void {");
+        }
         self.indent();
 
         if (self.needs_allocator) {
@@ -298,6 +306,11 @@ pub const ZigCodeGenerator = struct {
             if (node != .function_def and node != .class_def) {
                 try statements.visitNode(self, node);
             }
+        }
+
+        // For shared libraries, return 0 for success
+        if (self.is_shared_lib) {
+            try self.emit("return 0;");
         }
 
         self.dedent();
