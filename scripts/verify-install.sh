@@ -1,31 +1,31 @@
 #!/bin/bash
-# Verify Zyth installation
+# Verify PyX installation
 
 set -e
 
-echo "🔍 Verifying Zyth installation..."
+echo "🔍 Verifying PyX installation..."
 echo ""
 
-# Check zyth command exists
-if command -v zyth >/dev/null 2>&1; then
-    echo "✅ zyth command found in PATH"
+# Check pyx command exists
+if command -v pyx >/dev/null 2>&1; then
+    echo "✅ pyx command found in PATH"
 else
-    echo "❌ zyth command not found"
+    echo "❌ pyx command not found"
     echo "   Run: source .venv/bin/activate"
     exit 1
 fi
 
 # Test help
 echo "✅ Testing --help..."
-zyth --help >/dev/null
+pyx --help >/dev/null
 
 # Test compilation
 echo "✅ Testing compilation..."
-zyth examples/fibonacci.py -o /tmp/zyth_verify_test >/dev/null 2>&1
+pyx examples/fibonacci.py -o /tmp/pyx_verify_test >/dev/null 2>&1
 
 # Test execution
 echo "✅ Testing execution..."
-OUTPUT=$(/tmp/zyth_verify_test 2>&1)
+OUTPUT=$(/tmp/pyx_verify_test 2>&1)
 if [ "$OUTPUT" = "55" ]; then
     echo "✅ Output correct: $OUTPUT"
 else
@@ -34,10 +34,10 @@ else
 fi
 
 # Clean up
-rm -f /tmp/zyth_verify_test
+rm -f /tmp/pyx_verify_test
 
 echo ""
-echo "✅ All checks passed! Zyth is properly installed."
+echo "✅ All checks passed! PyX is properly installed."
 echo ""
-echo "Try: zyth examples/fibonacci.py --run"
+echo "Try: pyx examples/fibonacci.py --run"
 echo ""

@@ -50,47 +50,47 @@ def run_python_example(example_name: str) -> str:
 
 def test_import_basic():
     """Test basic module import and function call"""
-    zyth_output = run_example("import_mymath")
+    pyx_output = run_example("import_mymath")
     py_output = run_python_example("import_mymath")
 
-    assert zyth_output == py_output
-    assert zyth_output == "8"
+    assert pyx_output == py_output
+    assert pyx_output == "8"
 
 
 def test_import_multiple_calls():
     """Test multiple function calls from same module"""
-    zyth_output = run_example("import_multiple")
+    pyx_output = run_example("import_multiple")
     py_output = run_python_example("import_multiple")
 
-    assert zyth_output == py_output
-    assert "15" in zyth_output
-    assert "12" in zyth_output
-    assert "27" in zyth_output
+    assert pyx_output == py_output
+    assert "15" in pyx_output
+    assert "12" in pyx_output
+    assert "27" in pyx_output
 
 
 def test_import_nested():
     """Test nested module function calls"""
-    zyth_output = run_example("import_nested")
+    pyx_output = run_example("import_nested")
     py_output = run_python_example("import_nested")
 
-    assert zyth_output == py_output
-    assert zyth_output == "20"
+    assert pyx_output == py_output
+    assert pyx_output == "20"
 
 
 def test_import_multi_module():
     """Test importing multiple modules"""
-    zyth_output = run_example("import_multi_module")
+    pyx_output = run_example("import_multi_module")
     py_output = run_python_example("import_multi_module")
 
-    assert zyth_output == py_output
-    assert "5" in zyth_output
-    assert "HiHiHiHiHi" in zyth_output
+    assert pyx_output == py_output
+    assert "5" in pyx_output
+    assert "HiHiHiHiHi" in pyx_output
 
 
 def test_import_statement():
     """Test basic import statement (stub)"""
-    zyth_output = run_example("import_simple")
-    assert zyth_output == "Test passed"
+    pyx_output = run_example("import_simple")
+    assert pyx_output == "Test passed"
 
 
 def test_import_from_statement():
@@ -135,9 +135,9 @@ print(x)
 
 def test_pytest_import():
     """Test that pytest import doesn't crash"""
-    zyth_output = run_example("import_simple")
+    pyx_output = run_example("import_simple")
     # The example imports pytest and runs test
-    assert "Test passed" in zyth_output
+    assert "Test passed" in pyx_output
 
 
 def test_pytest_decorator_stub():

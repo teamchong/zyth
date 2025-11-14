@@ -5,12 +5,12 @@ import tempfile
 import os
 from pathlib import Path
 
-ZYTH_ROOT = Path(__file__).parent.parent
-COMPILER = ZYTH_ROOT / "packages" / "core" / "core" / "compiler.py"
+PYX_ROOT = Path(__file__).parent.parent
+COMPILER = PYX_ROOT / "packages" / "core" / "core" / "compiler.py"
 
 
 def run_code(code: str) -> tuple[str, str]:
-    """Run code in both Python and Zyth, return (py_output, zy_output)"""
+    """Run code in both Python and PyX, return (py_output, zy_output)"""
     with tempfile.TemporaryDirectory() as tmpdir:
         py_file = os.path.join(tmpdir, "test.py")
         zy_bin = os.path.join(tmpdir, "test_zy")
@@ -28,13 +28,13 @@ def run_code(code: str) -> tuple[str, str]:
         )
         py_output = py_result.stdout
 
-        # Compile and run Zyth
+        # Compile and run PyX
         compile_result = subprocess.run(
             ["uv", "run", "python", "-m", "core.compiler", py_file, zy_bin],
             capture_output=True,
             text=True,
             timeout=10,
-            cwd=ZYTH_ROOT
+            cwd=PYX_ROOT
         )
 
         if compile_result.returncode != 0:
@@ -50,7 +50,7 @@ def run_code(code: str) -> tuple[str, str]:
         if zy_result.returncode != 0:
             pytest.fail(f"Execution failed:\nSTDOUT:\n{zy_result.stdout}\nSTDERR:\n{zy_result.stderr}")
 
-        # Zyth outputs to stderr (Zig debug.print), Python to stdout
+        # PyX outputs to stderr (Zig debug.print), Python to stdout
         zy_output = zy_result.stderr
 
         return py_output, zy_output

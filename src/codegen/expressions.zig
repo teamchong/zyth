@@ -37,8 +37,18 @@ pub fn visitExpr(self: *ZigCodeGenerator, node: ast.Node) CodegenError!ExprResul
 
         .subscript => |sub| visitSubscript(self, sub),
 
+        .await_expr => |await_expr| visitAwaitExpr(self, await_expr),
+
         else => error.UnsupportedExpression,
     };
+}
+
+/// Visit await expression
+fn visitAwaitExpr(self: *ZigCodeGenerator, await_expr: ast.Node.AwaitExpr) CodegenError!ExprResult {
+    // For Phase 1, we just evaluate the expression directly
+    // Phase 2 will add proper suspend/resume logic
+    const value_result = try visitExpr(self, await_expr.value.*);
+    return value_result;
 }
 
 /// Visit a constant expression

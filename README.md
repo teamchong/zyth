@@ -1,4 +1,4 @@
-# Zyth
+# PyX
 
 **v0.1.0-alpha** - Early development, not production-ready
 
@@ -10,12 +10,12 @@ Python to Zig AOT compiler. Write Python, run native code.
 
 ```bash
 # Clone and install
-git clone <repo-url> zyth
-cd zyth
+git clone <repo-url> pyx
+cd pyx
 make install
 
 # Compile and run
-zyth examples/fibonacci.py
+pyx examples/fibonacci.py
 ```
 
 ## Installation
@@ -28,7 +28,7 @@ zyth examples/fibonacci.py
 make install
 ```
 
-This builds an optimized 433KB binary and installs it to `~/.local/bin/zyth`.
+This builds an optimized 433KB binary and installs it to `~/.local/bin/pyx`.
 
 Make sure `~/.local/bin` is in your PATH:
 ```bash
@@ -39,13 +39,13 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ```bash
 # Compile and run
-zyth your_file.py
+pyx your_file.py
 
 # Build without running
-zyth build your_file.py
+pyx build your_file.py
 
 # Custom output path
-zyth build your_file.py /tmp/output
+pyx build your_file.py /tmp/output
 ```
 
 ## Example
@@ -63,18 +63,18 @@ print(result)
 
 **Compile and run:**
 ```bash
-zyth examples/fibonacci.py
+pyx examples/fibonacci.py
 # Output: 55
 
 # Or build without running
-zyth build examples/fibonacci.py
-./.zyth/fibonacci
+pyx build examples/fibonacci.py
+./.pyx/fibonacci
 # Output: 55
 ```
 
 ## Performance
 
-| Benchmark | CPython | Zyth | Speedup |
+| Benchmark | CPython | PyX | Speedup |
 |:---|---:|---:|---:|
 | **Loop sum (1M)** | 65.4 ms | 1.6 ms | **41.40x faster** 🔥 |
 | **Fibonacci(35)** | 804.5 ms | 28.2 ms | **28.56x faster** 🚀 |
@@ -84,7 +84,7 @@ zyth build examples/fibonacci.py
 | **String concat** | 23.6 ms | 1.9 ms | **12.24x faster** ⚡ |
 
 **Benchmarked with [hyperfine](https://github.com/sharkdp/hyperfine)** on macOS ARM64.
-**Note:** Zyth binaries are pre-compiled - benchmarks measure **runtime only**, not compile time.
+**Note:** PyX binaries are pre-compiled - benchmarks measure **runtime only**, not compile time.
 
 Raw results: [loop_sum_results.md](benchmarks/loop_sum_results.md) · [fibonacci_results.md](benchmarks/fibonacci_results.md) · [list_methods_results.md](benchmarks/list_methods_results.md) · [list_ops_results.md](benchmarks/list_ops_results.md) · [string_results.md](benchmarks/string_results.md)
 
@@ -139,11 +139,11 @@ Raw results: [loop_sum_results.md](benchmarks/loop_sum_results.md) · [fibonacci
 - [ ] Generators
 
 **Phase 2: Standard Library**
-- [ ] zyth.web (HTTP server)
-- [ ] zyth.http (HTTP client)
-- [ ] zyth.ai (LLM integration)
-- [ ] zyth.async (async/await)
-- [ ] zyth.db (database connectors)
+- [ ] pyx.web (HTTP server)
+- [ ] pyx.http (HTTP client)
+- [ ] pyx.ai (LLM integration)
+- [ ] pyx.async (async/await)
+- [ ] pyx.db (database connectors)
 
 **Phase 3: Advanced**
 - [ ] WebAssembly target
@@ -156,7 +156,7 @@ Raw results: [loop_sum_results.md](benchmarks/loop_sum_results.md) · [fibonacci
 **Pure Zig Compiler (No Python Dependency):**
 
 ```
-zyth/
+pyx/
 ├── src/                      # Zig compiler (3 phases)
 │   ├── main.zig             # Entry point & CLI
 │   ├── lexer.zig            # Phase 1: Tokenization

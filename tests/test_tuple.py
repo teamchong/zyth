@@ -5,20 +5,20 @@ from pathlib import Path
 
 import pytest
 
-ZYTH_ROOT = Path(__file__).parent.parent
+PYX_ROOT = Path(__file__).parent.parent
 
 
-def run_zyth_code(code: str) -> str:
-    """Compile and run Zyth code, return stderr output"""
+def run_pyx_code(code: str) -> str:
+    """Compile and run PyX code, return stderr output"""
     with tempfile.TemporaryDirectory() as tmpdir:
         py_file = Path(tmpdir) / "test.py"
         py_file.write_text(code)
         zy_bin = Path(tmpdir) / "test_bin"
 
-        # Compile with zyth
+        # Compile with pyx
         compile_result = subprocess.run(
             ['uv', 'run', 'python', '-m', 'core.compiler', str(py_file), str(zy_bin)],
-            cwd=ZYTH_ROOT,
+            cwd=PYX_ROOT,
             capture_output=True,
             text=True,
             timeout=30
@@ -56,7 +56,7 @@ pair = (1, 2)
 print(pair[0])
 print(pair[1])
 '''
-    output = run_zyth_code(code)
+    output = run_pyx_code(code)
     assert output == "1\n2\n"
 
 
@@ -68,7 +68,7 @@ print(len(pair))
 triple = (10, 20, 30)
 print(len(triple))
 '''
-    output = run_zyth_code(code)
+    output = run_pyx_code(code)
     assert output == "2\n3\n"
 
 
@@ -78,7 +78,7 @@ def test_tuple_empty():
 empty = ()
 print(len(empty))
 '''
-    output = run_zyth_code(code)
+    output = run_pyx_code(code)
     assert output == "0\n"
 
 
@@ -91,7 +91,7 @@ print(nums[2])
 print(nums[4])
 print(len(nums))
 '''
-    output = run_zyth_code(code)
+    output = run_pyx_code(code)
     assert output == "1\n3\n5\n5\n"
 
 
@@ -105,5 +105,5 @@ print(nums[2])
 print(nums[3])
 print(nums[4])
 '''
-    output = run_zyth_code(code)
+    output = run_pyx_code(code)
     assert output == "10\n20\n30\n40\n50\n"

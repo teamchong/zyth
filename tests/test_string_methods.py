@@ -5,12 +5,12 @@ import tempfile
 import os
 from pathlib import Path
 
-ZYTH_ROOT = Path(__file__).parent.parent
-COMPILER = ZYTH_ROOT / "packages" / "core" / "core" / "compiler.py"
+PYX_ROOT = Path(__file__).parent.parent
+COMPILER = PYX_ROOT / "packages" / "core" / "core" / "compiler.py"
 
 
 def run_code(code: str) -> tuple[str, str]:
-    """Run code in both Python and Zyth, return (py_output, zy_output)"""
+    """Run code in both Python and PyX, return (py_output, zy_output)"""
     with tempfile.TemporaryDirectory() as tmpdir:
         py_file = os.path.join(tmpdir, "test.py")
         zy_bin = os.path.join(tmpdir, "test_zy")
@@ -28,13 +28,13 @@ def run_code(code: str) -> tuple[str, str]:
         )
         py_output = py_result.stdout
 
-        # Compile and run Zyth
+        # Compile and run PyX
         compile_result = subprocess.run(
             ["uv", "run", "python", "-m", "core.compiler", py_file, zy_bin],
             capture_output=True,
             text=True,
             timeout=10,
-            cwd=ZYTH_ROOT
+            cwd=PYX_ROOT
         )
 
         if compile_result.returncode != 0:
@@ -48,9 +48,9 @@ def run_code(code: str) -> tuple[str, str]:
         )
 
         if zy_result.returncode != 0:
-            pytest.fail(f"Zyth execution failed (exit {zy_result.returncode}):\nSTDOUT:\n{zy_result.stdout}\nSTDERR:\n{zy_result.stderr}")
+            pytest.fail(f"PyX execution failed (exit {zy_result.returncode}):\nSTDOUT:\n{zy_result.stdout}\nSTDERR:\n{zy_result.stderr}")
 
-        # Zyth uses std.debug.print() which writes to stderr
+        # PyX uses std.debug.print() which writes to stderr
         zy_output = zy_result.stderr
 
         return py_output, zy_output
@@ -89,7 +89,7 @@ class TestStringMethods:
     def test_string_method(self, code, desc):
         """Test string methods match Python behavior"""
         py_out, zy_out = run_code(code)
-        assert py_out == zy_out, f"{desc}: Python={py_out!r}, Zyth={zy_out!r}"
+        assert py_out == zy_out, f"{desc}: Python={py_out!r}, PyX={zy_out!r}"
 
     def test_string_count_vs_list_count(self):
         """Test that count() dispatches correctly based on type"""

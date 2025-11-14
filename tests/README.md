@@ -1,10 +1,10 @@
-# Zyth Test Suite
+# PyX Test Suite
 
-Comprehensive tests ensuring Python/Zyth output equivalence.
+Comprehensive tests ensuring Python/PyX output equivalence.
 
 ## Structure
 
-- **`examples/`** - Demo files showing how to use Zyth (keep these!)
+- **`examples/`** - Demo files showing how to use PyX (keep these!)
 - **`tests/`** - Automated tests that verify demos work correctly
 
 ## Quick Start
@@ -23,10 +23,10 @@ pytest tests/test_regression.py::TestExamples::test_example[fibonacci-path3] -v
 ## Test Files
 
 ### `test_regression.py` - Regression Tests (28 tests)
-Runs all `examples/*.py` files and verifies Python/Zyth output matches.
+Runs all `examples/*.py` files and verifies Python/PyX output matches.
 - Auto-discovers all example files
-- Compiles each with Zyth
-- Compares Python vs Zyth output
+- Compiles each with PyX
+- Compares Python vs PyX output
 - **Status: 28/28 PASSING**
 - **Purpose:** Ensure demos stay working (regression testing)
 
@@ -52,8 +52,8 @@ Slowness is due to Zig compilation. Each test compiles a fresh binary.
 
 1. Write Python code to temp file
 2. Run with CPython → capture stdout
-3. Compile with Zyth compiler → Zig binary
-4. Run Zyth binary → capture stderr (uses `std.debug.print`)
+3. Compile with PyX compiler → Zig binary
+4. Run PyX binary → capture stderr (uses `std.debug.print`)
 5. Assert outputs match exactly
 
 ## Test Coverage

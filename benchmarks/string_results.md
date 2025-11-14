@@ -1,8 +1,8 @@
-# Zyth Performance Benchmarks
+# PyX Performance Benchmarks
 
 ## Summary
 
-| Benchmark | Zyth | Python | Speedup |
+| Benchmark | PyX | Python | Speedup |
 |:---|---:|---:|---:|
 | **Fibonacci(35)** | 28.2 ms | 804.5 ms | **28.56x faster** 🚀 |
 | **String Concat** | 1.9 ms | 23.6 ms | **12.24x faster** ⚡ |
@@ -25,12 +25,12 @@ result = fibonacci(35)  # Result: 9227465
 
 | Engine | Mean | Min | Max | Relative |
 |:---|---:|---:|---:|---:|
-| **Zyth (compiled)** | 28.2 ms | 26.8 ms | 30.9 ms | **1.00x** (baseline) |
+| **PyX (compiled)** | 28.2 ms | 26.8 ms | 30.9 ms | **1.00x** (baseline) |
 | Python (CPython) | 804.5 ms | 800.3 ms | 809.7 ms | 28.56x slower |
 
 ### Summary
 
-🚀 **Zyth is 28.56x faster than Python for recursive fibonacci**
+🚀 **PyX is 28.56x faster than Python for recursive fibonacci**
 
 ### Analysis
 
@@ -49,7 +49,7 @@ The 28x speedup comes from:
 ```python
 a = "Hello"
 b = "World"
-c = "Zyth"
+c = "PyX"
 d = "Compiler"
 result = a + b + c + d
 ```
@@ -58,12 +58,12 @@ result = a + b + c + d
 
 | Engine | Mean | Min | Max | Relative |
 |:---|---:|---:|---:|---:|
-| **Zyth (compiled)** | 1.9 ms | 0.9 ms | 4.3 ms | **1.00x** (baseline) |
+| **PyX (compiled)** | 1.9 ms | 0.9 ms | 4.3 ms | **1.00x** (baseline) |
 | Python (CPython) | 23.6 ms | 21.3 ms | 44.3 ms | 12.24x slower |
 
 ### Summary
 
-⚡ **Zyth is 12.24x faster than Python for string concatenation**
+⚡ **PyX is 12.24x faster than Python for string concatenation**
 
 ### Analysis
 

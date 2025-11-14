@@ -1,4 +1,4 @@
-# Comprehensive test of all operators in Zyth
+# Comprehensive test of all operators in PyX
 
 print(10)
 print(3)

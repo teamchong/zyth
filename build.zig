@@ -4,9 +4,9 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Main zyth compiler executable
+    // Main pyx compiler executable
     const exe = b.addExecutable(.{
-        .name = "zyth",
+        .name = "pyx",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
@@ -24,6 +24,6 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
-    const run_step = b.step("run", "Run the zyth compiler");
+    const run_step = b.step("run", "Run the pyx compiler");
     run_step.dependOn(&run_cmd.step);
 }

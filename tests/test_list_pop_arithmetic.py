@@ -24,7 +24,7 @@ print(total)
             text=True
         )
         
-        # Compile with Zyth
+        # Compile with PyX
         binary = Path(tmpdir) / "test"
         compile_result = subprocess.run(
             ["uv", "run", "python", "-m", "core.compiler", str(test_file), str(binary)],
@@ -35,7 +35,7 @@ print(total)
         if compile_result.returncode != 0:
             raise AssertionError(f"Compilation failed:\n{compile_result.stderr}")
         
-        # Run Zyth binary
+        # Run PyX binary
         zy_result = subprocess.run(
             [str(binary)],
             capture_output=True,
@@ -46,7 +46,7 @@ print(total)
         py_out = py_result.stdout.strip()
         zy_out = zy_result.stderr.strip().split('\n')[0] if zy_result.stderr else ""
         
-        assert py_out == zy_out, f"Output mismatch:\nPython: {py_out}\nZyth: {zy_out}"
+        assert py_out == zy_out, f"Output mismatch:\nPython: {py_out}\nPyX: {zy_out}"
 
 
 def test_getitem_in_multiplication():
@@ -71,7 +71,7 @@ print(total)
             text=True
         )
         
-        # Compile with Zyth
+        # Compile with PyX
         binary = Path(tmpdir) / "test"
         compile_result = subprocess.run(
             ["uv", "run", "python", "-m", "core.compiler", str(test_file), str(binary)],
@@ -82,7 +82,7 @@ print(total)
         if compile_result.returncode != 0:
             raise AssertionError(f"Compilation failed:\n{compile_result.stderr}")
         
-        # Run Zyth binary
+        # Run PyX binary
         zy_result = subprocess.run(
             [str(binary)],
             capture_output=True,
@@ -93,4 +93,4 @@ print(total)
         py_out = py_result.stdout.strip()
         zy_out = zy_result.stderr.strip().split('\n')[0] if zy_result.stderr else ""
         
-        assert py_out == zy_out, f"Output mismatch:\nPython: {py_out}\nZyth: {zy_out}"
+        assert py_out == zy_out, f"Output mismatch:\nPython: {py_out}\nPyX: {zy_out}"

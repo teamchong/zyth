@@ -1,7 +1,7 @@
 .PHONY: help build install verify test test-zig format-zig lint-zig clean run benchmark
 
 help:
-	@echo "Zyth Commands"
+	@echo "PyX Commands"
 	@echo "============="
 	@echo "install        - Build optimized binary and install to ~/.local/bin (RECOMMENDED)"
 	@echo "build          - Build debug binary for development"
@@ -14,29 +14,29 @@ help:
 	@echo "clean          - Remove build artifacts"
 
 build:
-	@echo "🔨 Building zyth compiler (debug mode)..."
+	@echo "🔨 Building pyx compiler (debug mode)..."
 	@command -v zig >/dev/null 2>&1 || { echo "❌ Error: zig not installed"; exit 1; }
 	zig build
-	@echo "✅ Debug binary built: zig-out/bin/zyth"
+	@echo "✅ Debug binary built: zig-out/bin/pyx"
 
 build-release:
-	@echo "🔨 Building zyth compiler (optimized for production)..."
+	@echo "🔨 Building pyx compiler (optimized for production)..."
 	@command -v zig >/dev/null 2>&1 || { echo "❌ Error: zig not installed"; exit 1; }
 	zig build -Doptimize=ReleaseSafe
-	@echo "✅ Release binary built: zig-out/bin/zyth"
+	@echo "✅ Release binary built: zig-out/bin/pyx"
 
 install: build-release
-	@echo "📦 Installing zyth to ~/.local/bin..."
+	@echo "📦 Installing pyx to ~/.local/bin..."
 	@mkdir -p ~/.local/bin
-	@cp zig-out/bin/zyth ~/.local/bin/zyth
-	@chmod +x ~/.local/bin/zyth
+	@cp zig-out/bin/pyx ~/.local/bin/pyx
+	@chmod +x ~/.local/bin/pyx
 	@echo ""
-	@echo "✅ Zyth installed!"
+	@echo "✅ PyX installed!"
 	@echo ""
 	@echo "Make sure ~/.local/bin is in your PATH:"
 	@echo "  export PATH=\"\$$HOME/.local/bin:\$$PATH\""
 	@echo ""
-	@echo "Then run: zyth your_file.py"
+	@echo "Then run: pyx your_file.py"
 	@echo ""
 
 verify:
@@ -72,10 +72,10 @@ clean:
 	rm -rf bin/ output fib_binary test_output
 
 run:
-	@echo "⚠️  DEPRECATED: Use 'zyth' command directly instead"
-	@echo "    New: zyth $(FILE)"
+	@echo "⚠️  DEPRECATED: Use 'pyx' command directly instead"
+	@echo "    New: pyx $(FILE)"
 	@echo ""
-	uv run zyth $(FILE)
+	uv run pyx $(FILE)
 
 benchmark:
 	uv run python _prototype/benchmark.py

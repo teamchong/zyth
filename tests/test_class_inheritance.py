@@ -12,7 +12,7 @@ def test_vehicle_inheritance(tmp_path):
         text=True
     )
 
-    # Compile Zyth version
+    # Compile PyX version
     output_path = tmp_path / "vehicle_test"
     subprocess.run(
         ["uv", "run", "python", "-m", "core.compiler",
@@ -29,7 +29,7 @@ def test_vehicle_inheritance(tmp_path):
     )
 
     # Compare outputs
-    assert result_py.stdout == result_zy.stderr, f"Python: {result_py.stdout}, Zyth: {result_zy.stderr}"
+    assert result_py.stdout == result_zy.stderr, f"Python: {result_py.stdout}, PyX: {result_zy.stderr}"
 
 
 def test_shape_inheritance(tmp_path):
@@ -41,7 +41,7 @@ def test_shape_inheritance(tmp_path):
         text=True
     )
 
-    # Compile Zyth version
+    # Compile PyX version
     output_path = tmp_path / "shape_test"
     subprocess.run(
         ["uv", "run", "python", "-m", "core.compiler",
@@ -58,7 +58,7 @@ def test_shape_inheritance(tmp_path):
     )
 
     # Compare outputs
-    assert result_py.stdout == result_zy.stderr, f"Python: {result_py.stdout}, Zyth: {result_zy.stderr}"
+    assert result_py.stdout == result_zy.stderr, f"Python: {result_py.stdout}, PyX: {result_zy.stderr}"
 
 
 def test_simple_inheritance(tmp_path):
@@ -70,7 +70,7 @@ def test_simple_inheritance(tmp_path):
         text=True
     )
 
-    # Compile Zyth version
+    # Compile PyX version
     output_path = tmp_path / "simple_test"
     subprocess.run(
         ["uv", "run", "python", "-m", "core.compiler",
@@ -87,4 +87,4 @@ def test_simple_inheritance(tmp_path):
     )
 
     # Compare outputs
-    assert result_py.stdout == result_zy.stderr, f"Python: {result_py.stdout}, Zyth: {result_zy.stderr}"
+    assert result_py.stdout == result_zy.stderr, f"Python: {result_py.stdout}, PyX: {result_zy.stderr}"

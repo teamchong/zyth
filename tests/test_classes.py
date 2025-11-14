@@ -14,8 +14,8 @@ def run_python(code: str) -> str:
     return result.stderr + result.stdout
 
 
-def run_zyth(code: str) -> str:
-    """Compile and run Zyth code, return output"""
+def run_pyx(code: str) -> str:
+    """Compile and run PyX code, return output"""
     import tempfile
     import os
     from core.compiler import compile_file
@@ -46,8 +46,8 @@ c = Counter()
 print(c.count)
 """
     python_output = run_python(code)
-    zyth_output = run_zyth(code)
-    assert python_output.strip() == zyth_output.strip()
+    pyx_output = run_pyx(code)
+    assert python_output.strip() == pyx_output.strip()
 
 
 def test_instance_creation():
@@ -63,8 +63,8 @@ print(c1.count)
 print(c2.count)
 """
     python_output = run_python(code)
-    zyth_output = run_zyth(code)
-    assert python_output.strip() == zyth_output.strip()
+    pyx_output = run_pyx(code)
+    assert python_output.strip() == pyx_output.strip()
 
 
 def test_method_call():
@@ -82,8 +82,8 @@ c.increment()
 print(c.count)
 """
     python_output = run_python(code)
-    zyth_output = run_zyth(code)
-    assert python_output.strip() == zyth_output.strip()
+    pyx_output = run_pyx(code)
+    assert python_output.strip() == pyx_output.strip()
 
 
 def test_instance_variables():
@@ -100,8 +100,8 @@ c = Counter()
 print(c.get_count())
 """
     python_output = run_python(code)
-    zyth_output = run_zyth(code)
-    assert python_output.strip() == zyth_output.strip()
+    pyx_output = run_pyx(code)
+    assert python_output.strip() == pyx_output.strip()
 
 
 def test_init_with_parameters():
@@ -115,8 +115,8 @@ p = Person(30)
 print(p.age)
 """
     python_output = run_python(code)
-    zyth_output = run_zyth(code)
-    assert python_output.strip() == zyth_output.strip()
+    pyx_output = run_pyx(code)
+    assert python_output.strip() == pyx_output.strip()
 
 
 def test_string_fields():
@@ -130,8 +130,8 @@ p = Person("Alice")
 print(p.name)
 """
     python_output = run_python(code)
-    zyth_output = run_zyth(code)
-    assert python_output.strip() == zyth_output.strip()
+    pyx_output = run_pyx(code)
+    assert python_output.strip() == pyx_output.strip()
 
 
 def test_mixed_field_types():
@@ -150,8 +150,8 @@ p = Person("Alice", 30)
 p.greet()
 """
     python_output = run_python(code)
-    zyth_output = run_zyth(code)
-    assert python_output.strip() == zyth_output.strip()
+    pyx_output = run_pyx(code)
+    assert python_output.strip() == pyx_output.strip()
 
 
 def test_method_with_return():
@@ -169,8 +169,8 @@ result = calc.add(5)
 print(result)
 """
     python_output = run_python(code)
-    zyth_output = run_zyth(code)
-    assert python_output.strip() == zyth_output.strip()
+    pyx_output = run_pyx(code)
+    assert python_output.strip() == pyx_output.strip()
 
 
 def test_multiple_methods():
@@ -196,8 +196,8 @@ c.decrement()
 print(c.get_count())
 """
     python_output = run_python(code)
-    zyth_output = run_zyth(code)
-    assert python_output.strip() == zyth_output.strip()
+    pyx_output = run_pyx(code)
+    assert python_output.strip() == pyx_output.strip()
 
 
 def test_field_modification():
@@ -213,5 +213,5 @@ c.count = 5
 print(c.count)
 """
     python_output = run_python(code)
-    zyth_output = run_zyth(code)
-    assert python_output.strip() == zyth_output.strip()
+    pyx_output = run_pyx(code)
+    assert python_output.strip() == pyx_output.strip()
