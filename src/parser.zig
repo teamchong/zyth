@@ -1,6 +1,7 @@
 const std = @import("std");
 const lexer = @import("lexer.zig");
 const ast = @import("ast.zig");
+const literals = @import("parser/literals.zig");
 
 pub const ParseError = error{
     UnexpectedEof,
@@ -63,7 +64,7 @@ pub const Parser = struct {
         return tok;
     }
 
-    fn expect(self: *Parser, token_type: lexer.TokenType) !lexer.Token {
+    pub fn expect(self: *Parser, token_type: lexer.TokenType) !lexer.Token {
         const tok = self.peek() orelse return error.UnexpectedEof;
         if (tok.type != token_type) {
             std.debug.print("Expected {s}, got {s} at line {d}:{d}\n", .{
@@ -77,7 +78,7 @@ pub const Parser = struct {
         return self.advance().?;
     }
 
-    fn match(self: *Parser, token_type: lexer.TokenType) bool {
+    pub fn match(self: *Parser, token_type: lexer.TokenType) bool {
         if (self.peek()) |tok| {
             if (tok.type == token_type) {
                 _ = self.advance();
@@ -87,7 +88,7 @@ pub const Parser = struct {
         return false;
     }
 
-    fn check(self: *Parser, token_type: lexer.TokenType) bool {
+    pub fn check(self: *Parser, token_type: lexer.TokenType) bool {
         if (self.peek()) |tok| {
             return tok.type == token_type;
         }
@@ -628,7 +629,7 @@ pub const Parser = struct {
 
     // ===== Expression Parsing =====
 
-    fn parseExpression(self: *Parser) ParseError!ast.Node {
+    pub fn parseExpression(self: *Parser) ParseError!ast.Node {
         return try self.parseOrExpr();
     }
 
@@ -1138,7 +1139,7 @@ pub const Parser = struct {
         };
     }
 
-    fn parsePrimary(self: *Parser) ParseError!ast.Node {
+    pub fn parsePrimary(self: *Parser) ParseError!ast.Node {
         if (self.peek()) |tok| {
             switch (tok.type) {
                 .Number => {
@@ -1242,10 +1243,10 @@ pub const Parser = struct {
                     }
                 },
                 .LBracket => {
-                    return try self.parseList();
+                    return try literals.parseList(self);
                 },
                 .LBrace => {
-                    return try self.parseDict();
+                    return try literals.parseDict(self);
                 },
                 .Minus => {
                     // Unary minus (e.g., -10)
@@ -1283,120 +1284,5 @@ pub const Parser = struct {
         }
 
         return error.UnexpectedEof;
-    }
-
-    fn parseList(self: *Parser) ParseError!ast.Node {
-        _ = try self.expect(.LBracket);
-
-        // Empty list
-        if (self.match(.RBracket)) {
-            return ast.Node{
-                .list = .{
-                    .elts = &[_]ast.Node{},
-                },
-            };
-        }
-
-        // Parse first element
-        const first_elt = try self.parseExpression();
-
-        // Check if this is a list comprehension: [x for x in items]
-        if (self.check(.For)) {
-            return try self.parseListComp(first_elt);
-        }
-
-        // Regular list: collect elements
-        var elts = std.ArrayList(ast.Node){};
-        defer elts.deinit(self.allocator);
-        try elts.append(self.allocator, first_elt);
-
-        while (self.match(.Comma)) {
-            // Allow trailing comma
-            if (self.check(.RBracket)) {
-                break;
-            }
-            const elt = try self.parseExpression();
-            try elts.append(self.allocator, elt);
-        }
-
-        _ = try self.expect(.RBracket);
-
-        return ast.Node{
-            .list = .{
-                .elts = try elts.toOwnedSlice(self.allocator),
-            },
-        };
-    }
-
-    fn parseListComp(self: *Parser, elt: ast.Node) ParseError!ast.Node {
-        // We've already parsed the element expression
-        // Now parse: for <target> in <iter> [if <condition>]
-
-        _ = try self.expect(.For);
-        // Parse target as primary (just a name, not a full expression)
-        const target = try self.parsePrimary();
-        _ = try self.expect(.In);
-        const iter = try self.parseExpression();
-
-        // Parse optional if conditions
-        var ifs = std.ArrayList(ast.Node){};
-        defer ifs.deinit(self.allocator);
-
-        while (self.match(.If)) {
-            const cond = try self.parseExpression();
-            try ifs.append(self.allocator, cond);
-        }
-
-        _ = try self.expect(.RBracket);
-
-        // Allocate nodes on heap
-        const elt_ptr = try self.allocator.create(ast.Node);
-        elt_ptr.* = elt;
-
-        const target_ptr = try self.allocator.create(ast.Node);
-        target_ptr.* = target;
-
-        const iter_ptr = try self.allocator.create(ast.Node);
-        iter_ptr.* = iter;
-
-        return ast.Node{
-            .listcomp = .{
-                .elt = elt_ptr,
-                .target = target_ptr,
-                .iter = iter_ptr,
-                .ifs = try ifs.toOwnedSlice(self.allocator),
-            },
-        };
-    }
-
-    fn parseDict(self: *Parser) ParseError!ast.Node {
-        _ = try self.expect(.LBrace);
-
-        var keys = std.ArrayList(ast.Node){};
-        defer keys.deinit(self.allocator);
-
-        var values = std.ArrayList(ast.Node){};
-        defer values.deinit(self.allocator);
-
-        while (!self.match(.RBrace)) {
-            const key = try self.parseExpression();
-            _ = try self.expect(.Colon);
-            const value = try self.parseExpression();
-
-            try keys.append(self.allocator, key);
-            try values.append(self.allocator, value);
-
-            if (!self.match(.Comma)) {
-                _ = try self.expect(.RBrace);
-                break;
-            }
-        }
-
-        return ast.Node{
-            .dict = .{
-                .keys = try keys.toOwnedSlice(self.allocator),
-                .values = try values.toOwnedSlice(self.allocator),
-            },
-        };
     }
 };

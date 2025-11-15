@@ -69,7 +69,7 @@ pub const JsonValue = union(enum) {
                 while (it.next()) |entry| {
                     const py_value = try entry.value_ptr.toPyObject(allocator);
                     try runtime.PyDict.set(dict, entry.key_ptr.*, py_value);
-                    runtime.decref(py_value, allocator); // Dict takes ownership
+                    // Note: PyDict.set takes ownership, no decref needed
                 }
                 return dict;
             },

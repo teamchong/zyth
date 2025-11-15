@@ -31,7 +31,7 @@ install: build-release
 	@cp zig-out/bin/pyaot ~/.local/bin/pyaot
 	@chmod +x ~/.local/bin/pyaot
 	@echo ""
-	@echo "✅ PyX installed!"
+	@echo "✅ PyAOT installed!"
 	@echo ""
 	@echo "Make sure ~/.local/bin is in your PATH:"
 	@echo "  export PATH=\"\$$HOME/.local/bin:\$$PATH\""

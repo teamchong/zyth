@@ -215,6 +215,11 @@ Detailed methodology and results: [benchmarks/RESULTS.md](benchmarks/RESULTS.md)
 - ✅ List: `append()`, `pop()`, `extend()`, `remove()`, `reverse()`, `count()`, `index()`, `insert()`, `clear()`, `copy()`
 - ✅ Dict: `get()`, `keys()`, `values()`, `items()`, `copy()`
 
+**Native Modules (3 total):**
+- ✅ `json` - JSON parsing and serialization (`json.loads()`, `json.dumps()`)
+- ✅ `http` - HTTP client (`http.get()`)
+- ⚙️ `asyncio` - Async runtime (module marked, integration in progress)
+
 **Advanced Features:**
 - ✅ List comprehensions with filters
 - ✅ List/string slicing with step (e.g., `nums[1:5:2]`)
@@ -225,25 +230,101 @@ Detailed methodology and results: [benchmarks/RESULTS.md](benchmarks/RESULTS.md)
 
 ### 📋 Roadmap
 
-**Phase 1: Core Completeness**
-- [ ] File I/O operations
+**Phase 1: Essential Libraries (Next 4 weeks)**
+- [✓] JSON support (`import json`) - Critical for real apps
+  - Use Zig's `std.json` (fast, zero-copy parsing)
+  - Comptime schema optimization for known structures
+- [ ] File I/O operations (open, read, write)
+  - Direct syscalls (Bun-style, no libuv overhead)
+  - Memory-mapped I/O for large files
+  - Zero-copy reads where possible
+- [ ] Basic HTTP client (sync only) - For API calls
+  - Fast connection pooling
+  - Reuse connections for same host
 - [ ] String formatting (f-strings)
-- [ ] More dict methods
-- [ ] Decorators
-- [ ] Generators
 
-**Phase 2: Standard Library**
-- [ ] pyaot.web (HTTP server)
-- [ ] pyaot.http (HTTP client)
-- [ ] pyaot.ai (LLM integration)
-- [ ] pyaot.async (async/await)
-- [ ] pyaot.db (database connectors)
+**Phase 2: Python Runtime Replacement (3 months)**
+- [ ] Async/await (libuv-based asyncio)
+  - Compatible with Python's asyncio API
+  - True parallelism (no GIL)
+- [ ] **Integration with uv** (package management)
+  - Seamless workflow: `uv pip install package` → `pyaot app.py`
+  - PyAOT focuses on runtime, uv handles packages (best tool for each job)
+  - Optional: `pyaot install` as wrapper around uv
+  - Why not build our own: uv is 10-100x faster than pip, Rust-based, well-funded team
+- [ ] Fast I/O primitives (Bun-inspired)
+  - Direct syscalls (bypass Python's I/O layers)
+  - Memory-mapped file operations
+  - Zero-copy networking
+  - Batch file operations
+  - **Core competency**: PyAOT controls Python I/O performance
+- [ ] Compiled binary caching
+  - Cache at `~/.pyaot/cache/` for instant re-runs
+  - Hash-based cache invalidation
+  - Share compiled binaries across projects
+- [ ] Single binary distribution
+  - All-in-one installer: `curl -fsSL https://pyaot.sh | sh`
+  - Contains: runtime + compiler + profiler + model tools
+  - Professional distribution (Bun-style)
+- [ ] pyaot.http (async HTTP client)
+  - Connection pooling per domain
+  - HTTP/2 and HTTP/3 support
+  - Automatic retry and backoff
+- [ ] pyaot.web (FastAPI-compatible web server)
+  - Native async (no WSGI overhead)
+  - Built-in static file serving
+  - WebSocket support
+- [ ] pyaot.db (async database drivers)
+  - PostgreSQL, MySQL, SQLite
+  - Connection pooling built-in
 
-**Phase 3: Advanced**
+**Phase 3: Profile-Guided Optimization (PGO)**
+- [ ] Lightweight profiling (`pyaot --profile app.py`)
+  - Branch frequency counters (1-2% overhead)
+  - Function call counts
+  - Data distribution tracking
+  - API usage patterns (which hosts/endpoints called most)
+- [ ] Comptime recompilation with profile data
+  - Branch reordering (check common case first)
+  - Buffer size optimization (right-sized allocations)
+  - Hot path specialization (fast paths for 80% cases)
+  - Dead code elimination (remove unused branches)
+  - **Specialized HTTP clients** (optimize for frequently-called APIs)
+    - Example: 95% requests to GitHub API → generate optimized GitHub client
+    - Connection pooling for hot domains
+    - Pre-parsed response structures
+- [ ] Continuous optimization (self-improving runtime)
+  - Week 1: Generic compilation
+  - Week 2+: Profile-optimized (30-500% faster)
+  - Auto-recompile when profile changes significantly
+- [ ] Use cases:
+  - Data science workflows (40% faster)
+  - Serverless functions (70% cost reduction via optimized cold starts)
+  - Web crawlers (50% faster via connection reuse + specialized parsers)
+  - Data pipelines (5-10x faster via right-sized buffers + fast paths)
+  - AI inference (2x faster for common prompts via layer pruning)
+
+**Phase 4: Model Compression (Comptime AI)**
+- [ ] AQLM compression (8x vs standard int4)
+- [ ] Hybrid compression (pruning + quantization + codebook)
+- [ ] Profile-guided model pruning
+  - Track which layers are actually used
+  - Remove unused layers for user's workload
+  - Example: 70B → 50B for short prompts
+- [ ] Run 70B models on 16GB hardware (12GB on disk)
+- [ ] Comptime optimization strategies:
+  - LLM-optimized compression (AI compressing AI)
+  - Symbolic regression for weights
+  - Multi-model weight sharing
+  - Procedural weight generation
+
+**Phase 5: Advanced**
 - [ ] WebAssembly target
 - [ ] Goroutines and channels
-- [ ] JIT compilation
 - [ ] REPL
+- [ ] More dict/list methods
+- [ ] Decorators
+- [ ] Generators
 
 ## Architecture
 

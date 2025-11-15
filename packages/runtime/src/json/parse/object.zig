@@ -45,8 +45,8 @@ pub fn parseObject(data: []const u8, pos: usize, allocator: std.mem.Allocator) J
         const key = key_result.value.string;
         i += key_result.consumed;
 
-        // Need to own the key string for HashMap
-        const owned_key = try allocator.dupe(u8, key);
+        // parseString already allocated the key, use it directly
+        const owned_key = key;
         errdefer allocator.free(owned_key);
 
         // Skip whitespace and expect colon

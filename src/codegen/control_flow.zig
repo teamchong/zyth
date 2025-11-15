@@ -144,7 +144,11 @@ fn visitRangeFor(self: *ZigCodeGenerator, for_node: ast.Node.For, args: []ast.No
     // Get loop variable name
     switch (for_node.target.*) {
         .name => |target_name| {
-            const loop_var = target_name.id;
+            // Python allows _ as a variable name, but Zig requires @"_" syntax
+            const loop_var = if (std.mem.eql(u8, target_name.id, "_"))
+                "_unused"
+            else
+                target_name.id;
             try self.var_types.put(loop_var, "int");
 
             // Parse range arguments

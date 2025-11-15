@@ -18,11 +18,11 @@ pub fn loads(json_str: *runtime.PyObject, allocator: std.mem.Allocator) !*runtim
     // Parse JSON into intermediate JsonValue
     var json_value = try parse_module.parse(json_bytes, allocator);
 
-    // Convert to PyObject (transfers ownership of all allocated data)
+    // Convert to PyObject (duplicates all strings)
     const result = try json_value.toPyObject(allocator);
 
-    // Clean up JsonValue containers (but not their contents which were transferred)
-    json_value.shallowDeinit(allocator);
+    // Clean up JsonValue and all its allocated data (strings were duplicated above)
+    json_value.deinit(allocator);
 
     return result;
 }

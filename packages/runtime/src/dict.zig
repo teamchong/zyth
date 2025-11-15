@@ -23,8 +23,11 @@ pub const PyDict = struct {
     pub fn set(obj: *runtime.PyObject, key: []const u8, value: *runtime.PyObject) !void {
         std.debug.assert(obj.type_id == .dict);
         const data: *PyDict = @ptrCast(@alignCast(obj.data));
-        try data.map.put(key, value);
-        // Note: Caller transfers ownership, no incref needed
+
+        // Duplicate the key since dict needs to own it
+        const owned_key = try data.map.allocator.dupe(u8, key);
+        try data.map.put(owned_key, value);
+        // Note: Caller transfers ownership of value, no incref needed
     }
 
     pub fn get(obj: *runtime.PyObject, key: []const u8) ?*runtime.PyObject {
@@ -111,10 +114,10 @@ pub const PyDict = struct {
     pub fn pop(allocator: std.mem.Allocator, obj: *runtime.PyObject, key: []const u8) ?*runtime.PyObject {
         std.debug.assert(obj.type_id == .dict);
         const data: *PyDict = @ptrCast(@alignCast(obj.data));
-        _ = allocator;
 
-        // Get value before removing
+        // Get value and key before removing
         if (data.map.fetchRemove(key)) |entry| {
+            allocator.free(entry.key); // Free the duplicated key
             return entry.value;
         }
         return null;
@@ -133,13 +136,14 @@ pub const PyDict = struct {
         const alloc = allocator; // Use passed allocator for consistency
         _ = alloc;
 
-        // Decref all values before clearing
-        var iterator = data.map.valueIterator();
-        while (iterator.next()) |value| {
-            runtime.decref(value.*, data.map.allocator);
+        // Free keys and decref values before clearing
+        var iterator = data.map.iterator();
+        while (iterator.next()) |entry| {
+            data.map.allocator.free(entry.key_ptr.*); // Free the duplicated key
+            runtime.decref(entry.value_ptr.*, data.map.allocator); // Decref the value
         }
 
-        data.map.clearAndFree();
+        data.map.clearRetainingCapacity();
     }
 
     pub fn items(allocator: std.mem.Allocator, obj: *runtime.PyObject) !*runtime.PyObject {
@@ -174,7 +178,8 @@ pub const PyDict = struct {
         // Copy all entries from other dict
         var iterator = other_data.map.iterator();
         while (iterator.next()) |entry| {
-            try data.map.put(entry.key_ptr.*, entry.value_ptr.*);
+            const owned_key = try data.map.allocator.dupe(u8, entry.key_ptr.*);
+            try data.map.put(owned_key, entry.value_ptr.*);
             runtime.incref(entry.value_ptr.*);
         }
     }
@@ -189,7 +194,8 @@ pub const PyDict = struct {
         // Copy all entries
         var iterator = data.map.iterator();
         while (iterator.next()) |entry| {
-            try new_data.map.put(entry.key_ptr.*, entry.value_ptr.*);
+            const owned_key = try new_data.map.allocator.dupe(u8, entry.key_ptr.*);
+            try new_data.map.put(owned_key, entry.value_ptr.*);
             runtime.incref(entry.value_ptr.*);
         }
 

@@ -802,6 +802,52 @@ fn visitPythonFunctionCall(self: *ZigCodeGenerator, module_code: []const u8, fun
         // Native JSON handling
         if (args.len == 0) return error.MissingArgument;
 
+        // Comptime optimization for constant JSON strings
+        if (is_json_loads) {
+            switch (args[0]) {
+                .constant => |constant| {
+                    if (constant.value == .string) {
+                        // Generate cached JSON parse for constant strings
+                        // This optimizes config files and constant JSON
+                        const json_str = constant.value.string;
+
+                        // Generate a static cached variable name
+                        const cache_var = try std.fmt.allocPrint(
+                            self.temp_allocator,
+                            "_json_cache_{d}",
+                            .{self.json_cache_counter}
+                        );
+                        self.json_cache_counter += 1;
+
+                        // Emit cache initialization at module level
+                        var cache_buf = std.ArrayList(u8){};
+                        try cache_buf.writer(self.temp_allocator).print(
+                            "// Cached JSON parse for constant string\nvar {s}: ?*runtime.PyObject = null;",
+                            .{cache_var}
+                        );
+                        try self.preamble.append(self.allocator, try cache_buf.toOwnedSlice(self.temp_allocator));
+
+                        // Generate cache check + parse code
+                        var code_buf = std.ArrayList(u8){};
+                        try code_buf.writer(self.temp_allocator).print(
+                            "blk: {{ if ({s}) |cached| {{ runtime.incref(cached); break :blk cached; }} " ++
+                            "const str = try runtime.PyString.create(allocator, {s}); " ++
+                            "const parsed = try runtime.jsonLoads(str, allocator); " ++
+                            "runtime.decref(str, allocator); " ++
+                            "{s} = parsed; " ++
+                            "runtime.incref(parsed); " ++
+                            "break :blk parsed; }}",
+                            .{cache_var, json_str, cache_var}
+                        );
+
+                        const code = try code_buf.toOwnedSlice(self.temp_allocator);
+                        return ExprResult{ .code = code, .needs_try = false, .needs_decref = true };
+                    }
+                },
+                else => {},
+            }
+        }
+
         const arg_result = try expressions.visitExpr(self, args[0]);
         const arg_code = try self.extractResultToStatement(arg_result);
 

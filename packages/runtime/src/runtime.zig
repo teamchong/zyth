@@ -81,10 +81,11 @@ pub fn decref(obj: *PyObject, allocator: std.mem.Allocator) void {
             },
             .dict => {
                 const data: *PyDict = @ptrCast(@alignCast(obj.data));
-                // Decref all values
-                var it = data.map.valueIterator();
-                while (it.next()) |value| {
-                    decref(value.*, allocator);
+                // Free keys and decref values
+                var it = data.map.iterator();
+                while (it.next()) |entry| {
+                    allocator.free(entry.key_ptr.*); // Free the duplicated key
+                    decref(entry.value_ptr.*, allocator); // Decref the value
                 }
                 data.map.deinit();
                 allocator.destroy(data);

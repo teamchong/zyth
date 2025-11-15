@@ -70,6 +70,7 @@ pub const ZigCodeGenerator = struct {
     arena: std.heap.ArenaAllocator,
     temp_allocator: std.mem.Allocator,
     output: std.ArrayList(u8),
+    body_buffer: std.ArrayList(u8), // Temporary buffer for function body
     indent_level: usize,
 
     // State tracking (matching Python codegen)
@@ -100,6 +101,8 @@ pub const ZigCodeGenerator = struct {
     is_shared_lib: bool, // Generate for shared library (.so) or binary
     current_allocator: []const u8, // Current allocator name (default "allocator", can be "loop_allocator")
     in_loop: bool, // Track if we're inside a loop body
+    json_cache_counter: usize, // Counter for generating unique JSON cache variable names
+    preamble: std.ArrayList([]const u8), // Code to emit before main function (for caches, etc.)
 
     pub fn init(allocator: std.mem.Allocator, is_shared_lib: bool) !*ZigCodeGenerator {
         const self = try allocator.create(ZigCodeGenerator);
@@ -109,6 +112,7 @@ pub const ZigCodeGenerator = struct {
             .arena = arena,
             .temp_allocator = undefined, // Will be set after arena is in struct
             .output = std.ArrayList(u8){},
+            .body_buffer = std.ArrayList(u8){},
             .indent_level = 0,
             .var_types = std.StringHashMap([]const u8).init(allocator),
             .declared_vars = std.StringHashMap(void).init(allocator),
@@ -134,6 +138,8 @@ pub const ZigCodeGenerator = struct {
             .is_shared_lib = is_shared_lib,
             .current_allocator = "allocator",
             .in_loop = false,
+            .json_cache_counter = 0,
+            .preamble = std.ArrayList([]const u8){},
         };
         // Set temp_allocator after arena is moved into struct
         self.temp_allocator = self.arena.allocator();
@@ -142,6 +148,7 @@ pub const ZigCodeGenerator = struct {
 
     pub fn deinit(self: *ZigCodeGenerator) void {
         self.output.deinit(self.allocator);
+        self.body_buffer.deinit(self.allocator);
         self.var_types.deinit();
         self.declared_vars.deinit();
         self.reassigned_vars.deinit();
@@ -153,6 +160,7 @@ pub const ZigCodeGenerator = struct {
         self.class_names.deinit();
         self.class_has_methods.deinit();
         self.method_return_types.deinit();
+        self.preamble.deinit(self.allocator);
         // Free class_methods
         var it = self.class_methods.iterator();
         while (it.next()) |entry| {
@@ -337,8 +345,15 @@ pub const ZigCodeGenerator = struct {
         }
 
         // Phase 5: Generate main function
-        // For shared libraries: export pyaot_main() for dlsym, returns c_int but can handle errors
-        // For binaries: regular main()
+        // IMPORTANT: Generate main function body into body_buffer first to collect preamble items
+        // (like JSON cache variables), then insert preamble before main function
+
+        // Swap to body_buffer for main function body generation
+        const saved_output = self.output;
+        _ = saved_output; // Will be restored later
+        self.output = self.body_buffer;
+
+        // Generate main function header (into body buffer for now)
         if (self.is_shared_lib) {
             try self.emit("pub export fn pyaot_main() callconv(.c) c_int {");
             self.indent();
