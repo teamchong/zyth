@@ -1,7 +1,7 @@
 .PHONY: help build install verify test test-zig format-zig lint-zig clean run benchmark
 
 help:
-	@echo "PyX Commands"
+	@echo "PyAOT Commands"
 	@echo "============="
 	@echo "install        - Build optimized binary and install to ~/.local/bin (RECOMMENDED)"
 	@echo "build          - Build debug binary for development"

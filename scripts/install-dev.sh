@@ -1,9 +1,9 @@
 #!/bin/bash
 set -e
 
-# PyX Development Installation Script
+# PyAOT Development Installation Script
 
-echo "🔧 Setting up PyX development environment..."
+echo "🔧 Setting up PyAOT development environment..."
 
 # Check prerequisites
 command -v uv >/dev/null 2>&1 || { echo "❌ Error: uv not installed. Install from https://docs.astral.sh/uv/"; exit 1; }

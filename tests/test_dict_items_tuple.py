@@ -9,7 +9,7 @@ PYAOT_ROOT = Path(__file__).parent.parent
 
 
 def run_pyaot_code(code: str) -> str:
-    """Compile and run PyX code, return stderr output"""
+    """Compile and run PyAOT code, return stderr output"""
     with tempfile.TemporaryDirectory() as tmpdir:
         py_file = Path(tmpdir) / "test.py"
         py_file.write_text(code)

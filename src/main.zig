@@ -4,6 +4,8 @@ const lexer = @import("lexer.zig");
 const parser = @import("parser.zig");
 const codegen = @import("codegen.zig");
 const compiler = @import("compiler.zig");
+const native_types = @import("analysis/native_types.zig");
+const native_codegen = @import("codegen/native.zig");
 
 const CompileOptions = struct {
     input_file: []const u8,
@@ -231,21 +233,30 @@ fn compileFile(allocator: std.mem.Allocator, opts: CompileOptions) !void {
     var tree = try p.parse();
     defer tree.deinit(allocator);
 
-    // PHASE 3: Codegen - Generate Zig code
-    std.debug.print("Generating Zig code...\n", .{});
-    const is_shared_lib = !opts.binary;
-    const zig_code = try codegen.generate(allocator, tree, is_shared_lib);
+    // Ensure tree is a module
+    if (tree != .module) {
+        std.debug.print("Error: Expected module, got {s}\n", .{@tagName(tree)});
+        return error.InvalidAST;
+    }
+
+    // PHASE 3: Type Inference - Infer native Zig types
+    std.debug.print("Inferring types...\n", .{});
+    var type_inferrer = try native_types.TypeInferrer.init(allocator);
+    defer type_inferrer.deinit();
+
+    try type_inferrer.analyze(tree.module);
+
+    // PHASE 4: Native Codegen - Generate native Zig code (no PyObject overhead)
+    std.debug.print("Generating native Zig code...\n", .{});
+    var native_gen = try native_codegen.NativeCodegen.init(allocator, &type_inferrer);
+    defer native_gen.deinit();
+
+    const zig_code = try native_gen.generate(tree.module);
     defer allocator.free(zig_code);
 
-    // Compile Zig code
-    const output_type = if (opts.binary) "binary" else "shared library";
-    std.debug.print("Compiling to {s}...\n", .{output_type});
-
-    if (opts.binary) {
-        try compiler.compileZig(allocator, zig_code, bin_path);
-    } else {
-        try compiler.compileZigSharedLib(allocator, zig_code, bin_path);
-    }
+    // Native codegen always produces binaries (not shared libraries)
+    std.debug.print("Compiling to native binary...\n", .{});
+    try compiler.compileZig(allocator, zig_code, bin_path);
 
     std.debug.print("✓ Compiled successfully to: {s}\n", .{bin_path});
 
@@ -255,14 +266,9 @@ fn compileFile(allocator: std.mem.Allocator, opts: CompileOptions) !void {
     // Run if mode is "run"
     if (std.mem.eql(u8, opts.mode, "run")) {
         std.debug.print("\n", .{});
-        if (opts.binary) {
-            // Run binary directly
-            var child = std.process.Child.init(&[_][]const u8{bin_path}, allocator);
-            _ = try child.spawnAndWait();
-        } else {
-            // Load and run shared library
-            try runSharedLib(allocator, bin_path);
-        }
+        // Native codegen always produces binaries
+        var child = std.process.Child.init(&[_][]const u8{bin_path}, allocator);
+        _ = try child.spawnAndWait();
     }
 }
 

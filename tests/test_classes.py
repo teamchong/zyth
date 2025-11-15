@@ -15,7 +15,7 @@ def run_python(code: str) -> str:
 
 
 def run_pyaot(code: str) -> str:
-    """Compile and run PyX code, return output"""
+    """Compile and run PyAOT code, return output"""
     import tempfile
     import os
     from core.compiler import compile_file

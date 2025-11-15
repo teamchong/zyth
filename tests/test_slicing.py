@@ -10,7 +10,7 @@ COMPILER = PYAOT_ROOT / "packages" / "core" / "core" / "compiler.py"
 
 
 def run_code(code: str) -> tuple[str, str]:
-    """Run code in both Python and PyX, return (py_output, zy_output)"""
+    """Run code in both Python and PyAOT, return (py_output, zy_output)"""
     with tempfile.TemporaryDirectory() as tmpdir:
         py_file = os.path.join(tmpdir, "test.py")
         zy_bin = os.path.join(tmpdir, "test_zy")
@@ -28,7 +28,7 @@ def run_code(code: str) -> tuple[str, str]:
         )
         py_output = py_result.stdout
 
-        # Compile and run PyX
+        # Compile and run PyAOT
         compile_result = subprocess.run(
             ["uv", "run", "python", "-m", "core.compiler", py_file, zy_bin],
             capture_output=True,
@@ -50,7 +50,7 @@ def run_code(code: str) -> tuple[str, str]:
         if zy_result.returncode != 0:
             pytest.fail(f"Execution failed:\nSTDOUT:\n{zy_result.stdout}\nSTDERR:\n{zy_result.stderr}")
 
-        # PyX outputs to stderr (Zig debug.print), Python to stdout
+        # PyAOT outputs to stderr (Zig debug.print), Python to stdout
         zy_output = zy_result.stderr
 
         return py_output, zy_output

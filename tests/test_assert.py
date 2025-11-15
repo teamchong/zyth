@@ -8,7 +8,7 @@ PYAOT_ROOT = Path(__file__).parent.parent
 
 
 def run_code(code: str) -> tuple[str, str, int, int]:
-    """Run code in both Python and PyX, return (py_output, zy_output, py_exit, zy_exit)"""
+    """Run code in both Python and PyAOT, return (py_output, zy_output, py_exit, zy_exit)"""
     with tempfile.TemporaryDirectory() as tmpdir:
         py_file = os.path.join(tmpdir, "test.py")
         zy_bin = os.path.join(tmpdir, "test_zy")
@@ -27,7 +27,7 @@ def run_code(code: str) -> tuple[str, str, int, int]:
         py_output = py_result.stdout + py_result.stderr
         py_exit = py_result.returncode
 
-        # Compile and run PyX
+        # Compile and run PyAOT
         compile_result = subprocess.run(
             ["uv", "run", "python", "-m", "core.compiler", py_file, zy_bin],
             capture_output=True,
@@ -46,7 +46,7 @@ def run_code(code: str) -> tuple[str, str, int, int]:
             timeout=5
         )
 
-        # PyX writes to stderr (std.debug.print)
+        # PyAOT writes to stderr (std.debug.print)
         zy_output = zy_result.stderr + zy_result.stdout
         zy_exit = zy_result.returncode
 
@@ -65,7 +65,7 @@ print("All assertions passed")
     py_out, zy_out, py_exit, zy_exit = run_code(code)
 
     assert py_exit == 0, f"Python exited with code {py_exit}"
-    assert zy_exit == 0, f"PyX exited with code {zy_exit}"
+    assert zy_exit == 0, f"PyAOT exited with code {zy_exit}"
     assert "All assertions passed" in py_out
     assert "All assertions passed" in zy_out
 
@@ -81,7 +81,7 @@ print("This should not print")
 
     # Both should fail with non-zero exit
     assert py_exit != 0, f"Python should have failed but exited with code {py_exit}"
-    assert zy_exit != 0, f"PyX should have failed but exited with code {zy_exit}"
+    assert zy_exit != 0, f"PyAOT should have failed but exited with code {zy_exit}"
 
     # Both should print AssertionError
     assert "AssertionError" in py_out

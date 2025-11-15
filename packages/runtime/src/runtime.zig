@@ -1,4 +1,4 @@
-/// PyX Runtime Library
+/// PyAOT Runtime Library
 /// Core runtime support for compiled Python code
 const std = @import("std");
 const pyint = @import("pyint.zig");

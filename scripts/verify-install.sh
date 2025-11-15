@@ -1,9 +1,9 @@
 #!/bin/bash
-# Verify PyX installation
+# Verify PyAOT installation
 
 set -e
 
-echo "🔍 Verifying PyX installation..."
+echo "🔍 Verifying PyAOT installation..."
 echo ""
 
 # Check pyaot command exists
@@ -37,7 +37,7 @@ fi
 rm -f /tmp/pyaot_verify_test
 
 echo ""
-echo "✅ All checks passed! PyX is properly installed."
+echo "✅ All checks passed! PyAOT is properly installed."
 echo ""
 echo "Try: pyaot examples/fibonacci.py --run"
 echo ""

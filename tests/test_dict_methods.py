@@ -10,7 +10,7 @@ COMPILER = PYAOT_ROOT / "packages" / "core" / "core" / "compiler.py"
 
 
 def run_code(code: str) -> tuple[str, str]:
-    """Run code in both Python and PyX, return (py_output, zy_output)"""
+    """Run code in both Python and PyAOT, return (py_output, zy_output)"""
     with tempfile.TemporaryDirectory() as tmpdir:
         py_file = os.path.join(tmpdir, "test.py")
         zy_bin = os.path.join(tmpdir, "test_zy")
@@ -28,7 +28,7 @@ def run_code(code: str) -> tuple[str, str]:
         )
         py_output = py_result.stdout
 
-        # Compile and run PyX
+        # Compile and run PyAOT
         compile_result = subprocess.run(
             ["uv", "run", "python", "-m", "core.compiler", py_file, zy_bin],
             capture_output=True,
@@ -48,9 +48,9 @@ def run_code(code: str) -> tuple[str, str]:
         )
 
         if zy_result.returncode != 0:
-            pytest.fail(f"PyX execution failed (exit {zy_result.returncode}):\nSTDOUT:\n{zy_result.stdout}\nSTDERR:\n{zy_result.stderr}")
+            pytest.fail(f"PyAOT execution failed (exit {zy_result.returncode}):\nSTDOUT:\n{zy_result.stdout}\nSTDERR:\n{zy_result.stderr}")
 
-        # PyX uses std.debug.print() which writes to stderr
+        # PyAOT uses std.debug.print() which writes to stderr
         zy_output = zy_result.stderr
 
         return py_output, zy_output
@@ -73,7 +73,7 @@ class TestDictMethods:
     def test_dict_method(self, code, desc):
         """Test dict methods match Python behavior"""
         py_out, zy_out = run_code(code)
-        assert py_out == zy_out, f"{desc}: Python={py_out!r}, PyX={zy_out!r}"
+        assert py_out == zy_out, f"{desc}: Python={py_out!r}, PyAOT={zy_out!r}"
 
 
 if __name__ == "__main__":

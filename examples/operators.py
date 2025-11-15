@@ -1,4 +1,4 @@
-# Comprehensive test of all operators in PyX
+# Comprehensive test of all operators in PyAOT
 
 print(10)
 print(3)
