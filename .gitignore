@@ -62,10 +62,10 @@ uv.lock
 # macOS
 .DS_Store
 
-# PyX specific
+# PyAOT specific
 _prototype/
 *.zig.o
 *.bak*
 *.before_fix
 .venv/
-.pyx/
+.pyaot/

@@ -4,7 +4,7 @@ import tempfile
 import os
 from pathlib import Path
 
-PYX_ROOT = Path(__file__).parent.parent
+PYAOT_ROOT = Path(__file__).parent.parent
 
 
 def run_code(code: str) -> tuple[str, str, int, int]:
@@ -33,7 +33,7 @@ def run_code(code: str) -> tuple[str, str, int, int]:
             capture_output=True,
             text=True,
             timeout=10,
-            cwd=PYX_ROOT
+            cwd=PYAOT_ROOT
         )
 
         if compile_result.returncode != 0:

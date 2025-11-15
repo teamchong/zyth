@@ -5,8 +5,8 @@ import tempfile
 import os
 from pathlib import Path
 
-PYX_ROOT = Path(__file__).parent.parent
-COMPILER = PYX_ROOT / "packages" / "core" / "core" / "compiler.py"
+PYAOT_ROOT = Path(__file__).parent.parent
+COMPILER = PYAOT_ROOT / "packages" / "core" / "core" / "compiler.py"
 
 
 def run_code(code: str) -> tuple[str, str]:
@@ -34,7 +34,7 @@ def run_code(code: str) -> tuple[str, str]:
             capture_output=True,
             text=True,
             timeout=10,
-            cwd=PYX_ROOT
+            cwd=PYAOT_ROOT
         )
 
         if compile_result.returncode != 0:

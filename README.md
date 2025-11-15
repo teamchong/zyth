@@ -1,4 +1,4 @@
-# PyX
+# PyAOT
 
 **v0.1.0-alpha** - Early development, not production-ready
 
@@ -10,12 +10,12 @@ Python to Zig AOT compiler. Write Python, run native code.
 
 ```bash
 # Clone and install
-git clone <repo-url> pyx
-cd pyx
+git clone <repo-url> pyaot
+cd pyaot
 make install
 
 # Compile and run
-pyx examples/fibonacci.py
+pyaot examples/fibonacci.py
 ```
 
 ## Installation
@@ -28,7 +28,7 @@ pyx examples/fibonacci.py
 make install
 ```
 
-This builds an optimized 433KB binary and installs it to `~/.local/bin/pyx`.
+This builds an optimized 433KB binary and installs it to `~/.local/bin/pyaot`.
 
 Make sure `~/.local/bin` is in your PATH:
 ```bash
@@ -39,19 +39,19 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ```bash
 # Compile and run (default: shared library .so)
-pyx your_file.py
+pyaot your_file.py
 
 # Build standalone binary
-pyx --binary your_file.py
+pyaot --binary your_file.py
 
 # Force recompilation (ignore cache)
-pyx --force your_file.py
+pyaot --force your_file.py
 
 # Build only, don't run
-pyx build your_file.py
+pyaot build your_file.py
 
 # Build standalone binary without running
-pyx build --binary your_file.py
+pyaot build --binary your_file.py
 ```
 
 ### Compilation Modes
@@ -85,7 +85,7 @@ print(result)  # 9227465
 ```
 
 ```bash
-pyx examples/fibonacci.py
+pyaot examples/fibonacci.py
 # Output: 9227465 (in 59ms vs CPython's 842ms)
 ```
 
@@ -146,7 +146,7 @@ print(words[0])  # Hello
 
 Benchmarked with [hyperfine](https://github.com/sharkdp/hyperfine) on macOS ARM64.
 
-| Benchmark | CPython | PyX | Speedup |
+| Benchmark | CPython | PyAOT | Speedup |
 |:----------|--------:|----:|--------:|
 | **Loop sum (100M)** | 4.31 s | 152 ms | **28.3x** 🔥 |
 | **Fibonacci(35)** | 842 ms | 59.1 ms | **14.2x** 🚀 |
@@ -154,12 +154,12 @@ Benchmarked with [hyperfine](https://github.com/sharkdp/hyperfine) on macOS ARM6
 | **String concat** | 20.7 ms | 2.6 ms | **8.1x** ⚡ |
 
 **Key Insights:**
-- PyX excels at **computational tasks** (loops, recursion): 14-28x faster than CPython
-- PyX uses **ahead-of-time compilation** to native code (vs CPython's bytecode interpreter)
+- PyAOT excels at **computational tasks** (loops, recursion): 14-28x faster than CPython
+- PyAOT uses **ahead-of-time compilation** to native code (vs CPython's bytecode interpreter)
 - **Zero runtime overhead** - No JIT warmup or GC pauses
 - All benchmarks measure **runtime only** (binaries pre-compiled)
 
-**Why PyX is faster:**
+**Why PyAOT is faster:**
 - Direct compilation to native machine code via Zig
 - Eliminates Python interpreter overhead
 - Optimized memory management with reference counting
@@ -218,11 +218,11 @@ Detailed methodology: [BENCHMARKS.md](BENCHMARKS.md)
 - [ ] Generators
 
 **Phase 2: Standard Library**
-- [ ] pyx.web (HTTP server)
-- [ ] pyx.http (HTTP client)
-- [ ] pyx.ai (LLM integration)
-- [ ] pyx.async (async/await)
-- [ ] pyx.db (database connectors)
+- [ ] pyaot.web (HTTP server)
+- [ ] pyaot.http (HTTP client)
+- [ ] pyaot.ai (LLM integration)
+- [ ] pyaot.async (async/await)
+- [ ] pyaot.db (database connectors)
 
 **Phase 3: Advanced**
 - [ ] WebAssembly target
@@ -235,7 +235,7 @@ Detailed methodology: [BENCHMARKS.md](BENCHMARKS.md)
 **Pure Zig Compiler (No Python Dependency):**
 
 ```
-pyx/
+pyaot/
 ├── src/                      # Zig compiler (3 phases)
 │   ├── main.zig             # Entry point & CLI
 │   ├── lexer.zig            # Phase 1: Tokenization

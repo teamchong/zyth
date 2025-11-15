@@ -117,8 +117,8 @@ fn compileFile(allocator: std.mem.Allocator, opts: CompileOptions) !void {
         else
             basename;
 
-        // Create .pyx/ directory if it doesn't exist
-        std.fs.cwd().makeDir(".pyx") catch |err| {
+        // Create .pyaot/ directory if it doesn't exist
+        std.fs.cwd().makeDir(".pyaot") catch |err| {
             if (err != error.PathAlreadyExists) return err;
         };
 
@@ -127,9 +127,9 @@ fn compileFile(allocator: std.mem.Allocator, opts: CompileOptions) !void {
         // Shared lib: name_x86_64.so (or name_x86_64.dylib on macOS)
         const arch = getArch();
         const path = if (opts.binary)
-            try std.fmt.allocPrint(allocator, ".pyx/{s}", .{name_no_ext})
+            try std.fmt.allocPrint(allocator, ".pyaot/{s}", .{name_no_ext})
         else
-            try std.fmt.allocPrint(allocator, ".pyx/{s}_{s}.so", .{ name_no_ext, arch });
+            try std.fmt.allocPrint(allocator, ".pyaot/{s}_{s}.so", .{ name_no_ext, arch });
         break :blk path;
     };
     defer if (bin_path_allocated) allocator.free(bin_path);
@@ -223,20 +223,20 @@ fn runSharedLib(allocator: std.mem.Allocator, lib_path: []const u8) !void {
     };
     defer _ = std.c.dlclose(handle);
 
-    // Find the pyx_main function
-    const pyx_main = std.c.dlsym(handle, "pyx_main") orelse {
+    // Find the pyaot_main function
+    const pyaot_main = std.c.dlsym(handle, "pyaot_main") orelse {
         const err = std.c.dlerror();
-        const err_str = if (err) |e| std.mem.span(e) else "pyx_main not found";
-        std.debug.print("Failed to find pyx_main: {s}\n", .{err_str});
+        const err_str = if (err) |e| std.mem.span(e) else "pyaot_main not found";
+        std.debug.print("Failed to find pyaot_main: {s}\n", .{err_str});
         return error.DlsymFailed;
     };
 
     // Cast to function pointer and call
-    const main_fn: *const fn () callconv(.c) c_int = @ptrCast(@alignCast(pyx_main));
+    const main_fn: *const fn () callconv(.c) c_int = @ptrCast(@alignCast(pyaot_main));
     const result = main_fn();
 
     if (result != 0) {
-        std.debug.print("pyx_main returned non-zero: {d}\n", .{result});
+        std.debug.print("pyaot_main returned non-zero: {d}\n", .{result});
         return error.MainFailed;
     }
 }
@@ -244,23 +244,23 @@ fn runSharedLib(allocator: std.mem.Allocator, lib_path: []const u8) !void {
 fn printUsage() !void {
     std.debug.print(
         \\Usage:
-        \\  pyx <file.py>                    # Compile .so and run
-        \\  pyx <file.py> --force            # Force recompile
-        \\  pyx <file.py> --binary           # Compile to binary and run
-        \\  pyx build <file.py>              # Build .so only
-        \\  pyx build <file.py> --binary     # Build standalone binary
-        \\  pyx build <file.py> <out>        # Custom output path
-        \\  pyx build <file.py> -f           # Force rebuild
-        \\  pyx test                         # Run test suite
+        \\  pyaot <file.py>                    # Compile .so and run
+        \\  pyaot <file.py> --force            # Force recompile
+        \\  pyaot <file.py> --binary           # Compile to binary and run
+        \\  pyaot build <file.py>              # Build .so only
+        \\  pyaot build <file.py> --binary     # Build standalone binary
+        \\  pyaot build <file.py> <out>        # Custom output path
+        \\  pyaot build <file.py> -f           # Force rebuild
+        \\  pyaot test                         # Run test suite
         \\
         \\Flags:
         \\  --binary     Build standalone binary (default: shared library)
         \\  --force, -f  Force recompile (ignore cache)
         \\
         \\Examples:
-        \\  pyx myapp.py                     # Fast: builds myapp_x86_64.so
-        \\  pyx myapp.py -f                  # Force recompile myapp_x86_64.so
-        \\  pyx build --binary myapp.py      # Deploy: builds myapp binary
+        \\  pyaot myapp.py                     # Fast: builds myapp_x86_64.so
+        \\  pyaot myapp.py -f                  # Force recompile myapp_x86_64.so
+        \\  pyaot build --binary myapp.py      # Deploy: builds myapp binary
         \\
     , .{});
 }
@@ -274,7 +274,7 @@ fn computeHash(source: []const u8) [32]u8 {
 
 /// Get cache file path for a binary
 fn getCachePath(allocator: std.mem.Allocator, bin_path: []const u8) ![]const u8 {
-    // Cache file next to binary: .pyx/fibonacci.hash
+    // Cache file next to binary: .pyaot/fibonacci.hash
     return try std.fmt.allocPrint(allocator, "{s}.hash", .{bin_path});
 }
 

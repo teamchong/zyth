@@ -1,6 +1,6 @@
-# PyX Performance Benchmarks
+# PyAOT Performance Benchmarks
 
-Comprehensive performance analysis comparing PyX against CPython.
+Comprehensive performance analysis comparing PyAOT against CPython.
 
 ## Methodology
 
@@ -12,7 +12,7 @@ Comprehensive performance analysis comparing PyX against CPython.
 
 **Software Versions:**
 - CPython: 3.11+ (standard Python interpreter)
-- PyX: v0.1.0-alpha (AOT-compiled to native Zig)
+- PyAOT: v0.1.0-alpha (AOT-compiled to native Zig)
 - Zig: 0.15.2
 
 **Benchmark Tool:**
@@ -28,7 +28,7 @@ Comprehensive performance analysis comparing PyX against CPython.
 ✅ **Data structure efficiency** - List, string, dict operations
 
 ❌ **NOT measured:**
-- Compilation time (PyX requires pre-compilation)
+- Compilation time (PyAOT requires pre-compilation)
 - Startup time (negligible for both runtimes)
 - Memory usage (future work)
 
@@ -39,14 +39,14 @@ Comprehensive performance analysis comparing PyX against CPython.
 - No optimizations applied
 - Baseline for all comparisons
 
-**PyX:**
+**PyAOT:**
 - AOT compilation with `-O ReleaseFast`
 - Pre-compiled binaries (runtime-only benchmarks)
 - Fair comparison: execution time only
 
 ## Results Summary
 
-| Benchmark | CPython Time | PyX Time | Speedup |
+| Benchmark | CPython Time | PyAOT Time | Speedup |
 |:----------|-------------:|---------:|--------:|
 | **loop_sum** | 4.31 s | 152 ms | **28.3x** 🔥 |
 | **fibonacci(35)** | 842 ms | 59.1 ms | **14.2x** 🚀 |
@@ -69,14 +69,14 @@ print(total)
 **Results:**
 ```
 CPython: 4.313 s ± 0.226 s  [Range: 4.066 s … 4.797 s]
-PyX:     0.152 s ± 0.002 s  [Range: 0.149 s … 0.157 s]
+PyAOT:     0.152 s ± 0.002 s  [Range: 0.149 s … 0.157 s]
 
 Speedup: 28.33x faster
 ```
 
 **Analysis:**
 - Pure computational loop with minimal overhead
-- PyX's native compilation eliminates interpreter overhead
+- PyAOT's native compilation eliminates interpreter overhead
 - Demonstrates AOT compilation advantage on tight loops
 - CPython bottleneck: bytecode interpretation per iteration
 
@@ -96,16 +96,16 @@ print(result)
 **Results:**
 ```
 CPython: 842.4 ms ± 107.0 ms  [Range: 800.6 ms … 1146.2 ms]
-PyX:      59.1 ms ±   0.8 ms  [Range:  57.7 ms …  61.4 ms]
+PyAOT:      59.1 ms ±   0.8 ms  [Range:  57.7 ms …  61.4 ms]
 
 Speedup: 14.25x faster
 ```
 
 **Analysis:**
 - Recursive function calls stress call stack performance
-- PyX's direct Zig function calls have minimal overhead
+- PyAOT's direct Zig function calls have minimal overhead
 - CPython's function call overhead compounds with recursion depth
-- PyX shows consistent performance (low variance)
+- PyAOT shows consistent performance (low variance)
 
 ### 3. String Concatenation
 
@@ -119,19 +119,19 @@ print(result)
 **Results:**
 ```
 CPython: 20.7 ms ± 2.4 ms  [Range: 18.6 ms … 43.9 ms]
-PyX:      2.6 ms ± 2.4 ms  [Range:  1.2 ms … 34.7 ms]
+PyAOT:      2.6 ms ± 2.4 ms  [Range:  1.2 ms … 34.7 ms]
 
 Speedup: 8.07x faster
 ```
 
 **Analysis:**
 - String operations using Zig's efficient memory management
-- PyX avoids CPython's dynamic type checking overhead
+- PyAOT avoids CPython's dynamic type checking overhead
 - Memory allocation optimized in compiled code
 
 ## Performance Characteristics
 
-### Where PyX Excels
+### Where PyAOT Excels
 
 **Computational Workloads (14-28x faster):**
 - Tight loops with arithmetic operations
@@ -139,13 +139,13 @@ Speedup: 8.07x faster
 - Numerical computations
 - CPU-bound tasks
 
-**Why PyX is faster:**
+**Why PyAOT is faster:**
 - ✅ **AOT compilation** - No interpreter overhead
 - ✅ **Native code generation** - Direct machine instructions
 - ✅ **Zero runtime** - No JIT warmup or GC pauses
 - ✅ **Optimized Zig backend** - Zig compiler optimizations
 
-### When to Use PyX
+### When to Use PyAOT
 
 **Ideal for:**
 - Performance-critical code sections
@@ -163,14 +163,14 @@ Speedup: 8.07x faster
 
 | Tool | Approach | Typical Speedup | Compatibility | Tradeoff |
 |:-----|:---------|----------------:|:--------------|:---------|
-| **PyX** | AOT to Zig | **10-30x** | Limited subset | Pre-compilation required |
+| **PyAOT** | AOT to Zig | **10-30x** | Limited subset | Pre-compilation required |
 | **PyPy** | JIT compilation | 5-15x | High (~99%) | Memory overhead, warmup |
 | **Cython** | AOT to C | 2-50x* | Medium | Manual type annotations |
 | **CPython** | Bytecode interp | 1x (baseline) | 100% | Reference implementation |
 
 *Highly dependent on code patterns and type hints
 
-### PyX's Unique Position
+### PyAOT's Unique Position
 
 **vs CPython:**
 - ✅ **10-30x faster** on computational workloads
@@ -196,7 +196,7 @@ brew install hyperfine  # macOS
 # or
 apt install hyperfine   # Linux
 
-# Install PyX
+# Install PyAOT
 make install
 ```
 
@@ -204,10 +204,10 @@ make install
 
 ```bash
 # Compile benchmark
-pyx build --binary benchmarks/fibonacci.py
+pyaot build --binary benchmarks/fibonacci.py
 
 # Run with hyperfine
-hyperfine --warmup 3 'python benchmarks/fibonacci.py' '.pyx/fibonacci'
+hyperfine --warmup 3 'python benchmarks/fibonacci.py' '.pyaot/fibonacci'
 ```
 
 ### Expected Output
@@ -217,24 +217,24 @@ Benchmark 1: python benchmarks/fibonacci.py
   Time (mean ± σ):     842.4 ms ± 107.0 ms    [User: 823.1 ms, System: 13.3 ms]
   Range (min … max):   800.6 ms … 1146.2 ms    10 runs
 
-Benchmark 2: .pyx/fibonacci
+Benchmark 2: .pyaot/fibonacci
   Time (mean ± σ):      59.1 ms ±   0.8 ms    [User: 56.4 ms, System: 1.4 ms]
   Range (min … max):    57.7 ms …  61.4 ms    47 runs
 
 Summary
-  '.pyx/fibonacci' ran
+  '.pyaot/fibonacci' ran
    14.25 ± 1.82 times faster than 'python benchmarks/fibonacci.py'
 ```
 
 ## Interpretation Guidelines
 
 **What these benchmarks show:**
-- ✅ PyX's runtime performance on supported Python subset
+- ✅ PyAOT's runtime performance on supported Python subset
 - ✅ Relative performance vs CPython
 - ✅ Computational vs data structure performance
 
 **What these benchmarks DON'T show:**
-- ❌ Full Python compatibility (PyX supports subset)
+- ❌ Full Python compatibility (PyAOT supports subset)
 - ❌ Compilation time (only runtime measured)
 - ❌ Memory usage (not yet profiled)
 - ❌ Real-world application performance (micro-benchmarks)
@@ -263,6 +263,6 @@ Summary
 ---
 
 **Last Updated:** 2024-11-14
-**PyX Version:** v0.1.0-alpha
+**PyAOT Version:** v0.1.0-alpha
 **Hardware:** ARM64 (Apple Silicon)
 **OS:** macOS 26.1

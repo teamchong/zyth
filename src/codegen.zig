@@ -312,12 +312,12 @@ pub const ZigCodeGenerator = struct {
         }
 
         // Phase 5: Generate main function
-        // For shared libraries: export pyx_main() for dlsym, returns c_int but can handle errors
+        // For shared libraries: export pyaot_main() for dlsym, returns c_int but can handle errors
         // For binaries: regular main()
         if (self.is_shared_lib) {
-            try self.emit("pub export fn pyx_main() callconv(.c) c_int {");
+            try self.emit("pub export fn pyaot_main() callconv(.c) c_int {");
             self.indent();
-            try self.emit("_pyx_main_impl() catch |err| {");
+            try self.emit("_pyaot_main_impl() catch |err| {");
             self.indent();
             try self.emit("std.debug.print(\"Error: {any}\\n\", .{err});");
             try self.emit("return 1;");
@@ -327,7 +327,7 @@ pub const ZigCodeGenerator = struct {
             self.dedent();
             try self.emit("}");
             try self.emit("");
-            try self.emit("fn _pyx_main_impl() !void {");
+            try self.emit("fn _pyaot_main_impl() !void {");
         } else {
             try self.emit("pub fn main() !void {");
         }
@@ -355,7 +355,7 @@ pub const ZigCodeGenerator = struct {
             }
         }
 
-        // Close _pyx_main_impl() or main()
+        // Close _pyaot_main_impl() or main()
         self.dedent();
         try self.emit("}");
     }

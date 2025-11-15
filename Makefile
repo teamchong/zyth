@@ -14,29 +14,29 @@ help:
 	@echo "clean          - Remove build artifacts"
 
 build:
-	@echo "🔨 Building pyx compiler (debug mode)..."
+	@echo "🔨 Building pyaot compiler (debug mode)..."
 	@command -v zig >/dev/null 2>&1 || { echo "❌ Error: zig not installed"; exit 1; }
 	zig build
-	@echo "✅ Debug binary built: zig-out/bin/pyx"
+	@echo "✅ Debug binary built: zig-out/bin/pyaot"
 
 build-release:
-	@echo "🔨 Building pyx compiler (optimized for production)..."
+	@echo "🔨 Building pyaot compiler (optimized for production)..."
 	@command -v zig >/dev/null 2>&1 || { echo "❌ Error: zig not installed"; exit 1; }
 	zig build -Doptimize=ReleaseSafe
-	@echo "✅ Release binary built: zig-out/bin/pyx"
+	@echo "✅ Release binary built: zig-out/bin/pyaot"
 
 install: build-release
-	@echo "📦 Installing pyx to ~/.local/bin..."
+	@echo "📦 Installing pyaot to ~/.local/bin..."
 	@mkdir -p ~/.local/bin
-	@cp zig-out/bin/pyx ~/.local/bin/pyx
-	@chmod +x ~/.local/bin/pyx
+	@cp zig-out/bin/pyaot ~/.local/bin/pyaot
+	@chmod +x ~/.local/bin/pyaot
 	@echo ""
 	@echo "✅ PyX installed!"
 	@echo ""
 	@echo "Make sure ~/.local/bin is in your PATH:"
 	@echo "  export PATH=\"\$$HOME/.local/bin:\$$PATH\""
 	@echo ""
-	@echo "Then run: pyx your_file.py"
+	@echo "Then run: pyaot your_file.py"
 	@echo ""
 
 verify:
@@ -72,10 +72,10 @@ clean:
 	rm -rf bin/ output fib_binary test_output
 
 run:
-	@echo "⚠️  DEPRECATED: Use 'pyx' command directly instead"
-	@echo "    New: pyx $(FILE)"
+	@echo "⚠️  DEPRECATED: Use 'pyaot' command directly instead"
+	@echo "    New: pyaot $(FILE)"
 	@echo ""
-	uv run pyx $(FILE)
+	uv run pyaot $(FILE)
 
 benchmark:
 	uv run python _prototype/benchmark.py

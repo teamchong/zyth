@@ -5,20 +5,20 @@ from pathlib import Path
 
 import pytest
 
-PYX_ROOT = Path(__file__).parent.parent
+PYAOT_ROOT = Path(__file__).parent.parent
 
 
-def run_pyx_code(code: str) -> str:
+def run_pyaot_code(code: str) -> str:
     """Compile and run PyX code, return stderr output"""
     with tempfile.TemporaryDirectory() as tmpdir:
         py_file = Path(tmpdir) / "test.py"
         py_file.write_text(code)
         zy_bin = Path(tmpdir) / "test_bin"
 
-        # Compile with pyx
+        # Compile with pyaot
         compile_result = subprocess.run(
             ['uv', 'run', 'python', '-m', 'core.compiler', str(py_file), str(zy_bin)],
-            cwd=PYX_ROOT,
+            cwd=PYAOT_ROOT,
             capture_output=True,
             text=True,
             timeout=30
@@ -60,7 +60,7 @@ print(first[1])  # value from first tuple
 second = items[1]
 print(second[1])  # value from second tuple
 '''
-    output = run_pyx_code(code)
+    output = run_pyaot_code(code)
     # Dict iteration order may vary, but values should be 10 and 20
     values = [int(line) for line in output.strip().split('\n')]
     assert sorted(values) == [10, 20]
@@ -74,7 +74,7 @@ items = d.items()
 pair = items[0]
 print(len(pair))
 '''
-    output = run_pyx_code(code)
+    output = run_pyaot_code(code)
     assert output == "2\n"
 
 
@@ -85,7 +85,7 @@ d = {"a": 1, "b": 2, "c": 3}
 items = d.items()
 print(len(items))
 '''
-    output = run_pyx_code(code)
+    output = run_pyaot_code(code)
     assert output == "3\n"
 
 
@@ -98,5 +98,5 @@ pair = items[0]
 value = pair[1]
 print(value)
 '''
-    output = run_pyx_code(code)
+    output = run_pyaot_code(code)
     assert output == "42\n"

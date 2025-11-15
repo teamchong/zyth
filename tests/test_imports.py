@@ -50,47 +50,47 @@ def run_python_example(example_name: str) -> str:
 
 def test_import_basic():
     """Test basic module import and function call"""
-    pyx_output = run_example("import_mymath")
+    pyaot_output = run_example("import_mymath")
     py_output = run_python_example("import_mymath")
 
-    assert pyx_output == py_output
-    assert pyx_output == "8"
+    assert pyaot_output == py_output
+    assert pyaot_output == "8"
 
 
 def test_import_multiple_calls():
     """Test multiple function calls from same module"""
-    pyx_output = run_example("import_multiple")
+    pyaot_output = run_example("import_multiple")
     py_output = run_python_example("import_multiple")
 
-    assert pyx_output == py_output
-    assert "15" in pyx_output
-    assert "12" in pyx_output
-    assert "27" in pyx_output
+    assert pyaot_output == py_output
+    assert "15" in pyaot_output
+    assert "12" in pyaot_output
+    assert "27" in pyaot_output
 
 
 def test_import_nested():
     """Test nested module function calls"""
-    pyx_output = run_example("import_nested")
+    pyaot_output = run_example("import_nested")
     py_output = run_python_example("import_nested")
 
-    assert pyx_output == py_output
-    assert pyx_output == "20"
+    assert pyaot_output == py_output
+    assert pyaot_output == "20"
 
 
 def test_import_multi_module():
     """Test importing multiple modules"""
-    pyx_output = run_example("import_multi_module")
+    pyaot_output = run_example("import_multi_module")
     py_output = run_python_example("import_multi_module")
 
-    assert pyx_output == py_output
-    assert "5" in pyx_output
-    assert "HiHiHiHiHi" in pyx_output
+    assert pyaot_output == py_output
+    assert "5" in pyaot_output
+    assert "HiHiHiHiHi" in pyaot_output
 
 
 def test_import_statement():
     """Test basic import statement (stub)"""
-    pyx_output = run_example("import_simple")
-    assert pyx_output == "Test passed"
+    pyaot_output = run_example("import_simple")
+    assert pyaot_output == "Test passed"
 
 
 def test_import_from_statement():
@@ -135,9 +135,9 @@ print(x)
 
 def test_pytest_import():
     """Test that pytest import doesn't crash"""
-    pyx_output = run_example("import_simple")
+    pyaot_output = run_example("import_simple")
     # The example imports pytest and runs test
-    assert "Test passed" in pyx_output
+    assert "Test passed" in pyaot_output
 
 
 def test_pytest_decorator_stub():
