@@ -1,21 +1,14 @@
-# NumPy Demo - Basic array operations
+# NumPy Demo - Basic FFI test
 
 import numpy as np
 
-# Array creation
+# Create array
 a = np.array([1, 2, 3, 4, 5])
-print("Array:", a)
+print(a)
 
-# Array operations
-doubled = a * 2
-print("Doubled:", doubled)
+# Call NumPy functions
+s = np.sum(a)
+print(s)
 
-# Dot product
-dot = np.dot(a, a)
-print("Dot product:", dot)
-
-# Sum and mean
-total = np.sum(a)
-avg = np.mean(a)
-print("Sum:", total)
-print("Mean:", avg)
+m = np.mean(a)
+print(m)

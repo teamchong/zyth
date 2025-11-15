@@ -77,6 +77,7 @@ pub const ZigCodeGenerator = struct {
     class_has_methods: std.StringHashMap(bool),
     method_return_types: std.StringHashMap([]const u8),
     class_methods: std.StringHashMap(std.ArrayList(ast.Node.FunctionDef)),
+    imported_modules: std.StringHashMap(void), // Track imported module names
 
     needs_runtime: bool,
     needs_allocator: bool,
@@ -107,6 +108,7 @@ pub const ZigCodeGenerator = struct {
             .class_has_methods = std.StringHashMap(bool).init(allocator),
             .method_return_types = std.StringHashMap([]const u8).init(allocator),
             .class_methods = std.StringHashMap(std.ArrayList(ast.Node.FunctionDef)).init(allocator),
+            .imported_modules = std.StringHashMap(void).init(allocator),
             .needs_runtime = false,
             .needs_allocator = false,
             .needs_http = false,
@@ -139,6 +141,7 @@ pub const ZigCodeGenerator = struct {
             entry.value_ptr.*.deinit(self.allocator);
         }
         self.class_methods.deinit();
+        self.imported_modules.deinit();
         self.arena.deinit(); // Free all temp allocations
         self.allocator.destroy(self);
     }

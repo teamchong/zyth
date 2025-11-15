@@ -7,7 +7,26 @@ const expressions = @import("expressions.zig");
 const statements = @import("statements.zig");
 
 pub fn visitAttribute(self: *ZigCodeGenerator, attr: ast.Node.Attribute) CodegenError!ExprResult {
-    const value_result = try expressions.visitExpr(self,attr.value.*);
+    // Check if base is an imported module (e.g., np in np.array)
+    if (attr.value.* == .name) {
+        const var_name = attr.value.name.id;
+        if (self.imported_modules.contains(var_name)) {
+            // This is a module attribute access (e.g., np.array)
+            var buf = std.ArrayList(u8){};
+            try buf.writer(self.temp_allocator).print(
+                "try python.getattr(allocator, {s}, \"{s}\")",
+                .{ var_name, attr.attr }
+            );
+            return ExprResult{
+                .code = try buf.toOwnedSlice(self.temp_allocator),
+                .needs_try = false,
+                .needs_decref = false, // Python manages refcounting
+            };
+        }
+    }
+
+    // Regular attribute access (for PyObjects or user classes)
+    const value_result = try expressions.visitExpr(self, attr.value.*);
     var buf = std.ArrayList(u8){};
     try buf.writer(self.temp_allocator).print("{s}.{s}", .{ value_result.code, attr.attr });
     return ExprResult{
@@ -401,6 +420,23 @@ pub fn visitMethodCall(self: *ZigCodeGenerator, attr: ast.Node.Attribute, args: 
     const method_name = attr.attr;
     var buf = std.ArrayList(u8){};
 
+    // Check if this is a Python function call (e.g., np.array([1, 2, 3]))
+    const is_python_call = blk: {
+        switch (attr.value.*) {
+            .name => |obj_name| {
+                if (self.imported_modules.contains(obj_name.id)) {
+                    break :blk true;
+                }
+            },
+            else => {},
+        }
+        break :blk false;
+    };
+
+    if (is_python_call) {
+        return try visitPythonFunctionCall(self, obj_code, method_name, args);
+    }
+
     // Check if this is a user-defined class method call
     // If the object is a class instance (not a PyObject type), handle it first
     const is_class_method = blk: {
@@ -751,5 +787,137 @@ pub fn visitMethodCall(self: *ZigCodeGenerator, attr: ast.Node.Attribute, args: 
         }
 
         return ExprResult{ .code = method_call_code, .needs_try = false };
+    }
+}
+
+/// Handle Python function calls like np.array([1, 2, 3])
+fn visitPythonFunctionCall(self: *ZigCodeGenerator, module_code: []const u8, func_name: []const u8, args: []ast.Node) CodegenError!ExprResult {
+    self.needs_allocator = true;
+    self.needs_python = true;
+
+    // Get the function attribute from module
+    var func_buf = std.ArrayList(u8){};
+    try func_buf.writer(self.temp_allocator).print("python.getattr(allocator, {s}, \"{s}\")", .{ module_code, func_name });
+    const func_code = try func_buf.toOwnedSlice(self.temp_allocator);
+
+    // Convert arguments to Python objects
+    var arg_codes = std.ArrayList([]const u8){};
+
+    for (args) |arg| {
+        const arg_result = try expressions.visitExpr(self, arg);
+        const arg_code = try self.extractResultToStatement(arg_result);
+
+        // Convert Zig type to Python object
+        const converted = try convertToPythonObject(self, arg, arg_result, arg_code);
+        try arg_codes.append(self.temp_allocator, converted);
+    }
+
+    // Build argument array
+    var buf = std.ArrayList(u8){};
+    try buf.writer(self.temp_allocator).print("python.callPythonFunction(allocator, try {s}, &[_]*anyopaque{{", .{func_code});
+
+    for (arg_codes.items, 0..) |arg_code, i| {
+        if (i > 0) try buf.writer(self.temp_allocator).writeAll(", ");
+        try buf.writer(self.temp_allocator).print("@ptrCast({s})", .{arg_code});
+    }
+
+    try buf.writer(self.temp_allocator).writeAll("})");
+
+    const code = try buf.toOwnedSlice(self.temp_allocator);
+    return ExprResult{ .code = code, .needs_try = true, .needs_decref = false };
+}
+
+/// Convert Zig value to Python object (*anyopaque)
+fn convertToPythonObject(self: *ZigCodeGenerator, node: ast.Node, result: ExprResult, code: []const u8) CodegenError![]const u8 {
+    _ = result; // May use this later for type info
+
+    var buf = std.ArrayList(u8){};
+
+    // Check if it's a constant that needs conversion
+    switch (node) {
+        .constant => |c| {
+            switch (c.value) {
+                .string => {
+                    // String literal - code is already "runtime.PyString.create(...)"
+                    // Just wrap in try since it returns !*PyObject
+                    try buf.writer(self.temp_allocator).print("try {s}", .{code});
+                    return try buf.toOwnedSlice(self.temp_allocator);
+                },
+                .int => |num| {
+                    // Integer literal - convert to Python int
+                    try buf.writer(self.temp_allocator).print("try python.fromInt({d})", .{num});
+                    return try buf.toOwnedSlice(self.temp_allocator);
+                },
+                .float => |f| {
+                    // Float literal - convert to Python float
+                    try buf.writer(self.temp_allocator).print("try python.fromFloat({d})", .{f});
+                    return try buf.toOwnedSlice(self.temp_allocator);
+                },
+                .bool => |b| {
+                    // Bool literal - convert to Python bool (as int 0/1)
+                    const val: i64 = if (b) 1 else 0;
+                    try buf.writer(self.temp_allocator).print("try python.fromInt({d})", .{val});
+                    return try buf.toOwnedSlice(self.temp_allocator);
+                },
+            }
+        },
+        .list => |list_node| {
+            // List literal - for Python FFI, create a Python list, not PyAOT list
+            // Check if all elements are integers
+            var all_ints = true;
+            var int_values = std.ArrayList(i64){};
+
+            for (list_node.elts) |elt| {
+                if (elt != .constant or elt.constant.value != .int) {
+                    all_ints = false;
+                    break;
+                }
+                try int_values.append(self.temp_allocator, elt.constant.value.int);
+            }
+
+            if (all_ints and int_values.items.len > 0) {
+                // Create Python list from integers
+                try buf.writer(self.temp_allocator).writeAll("try python.listFromInts(&[_]i64{");
+                for (int_values.items, 0..) |val, i| {
+                    if (i > 0) try buf.writer(self.temp_allocator).writeAll(", ");
+                    try buf.writer(self.temp_allocator).print("{d}", .{val});
+                }
+                try buf.writer(self.temp_allocator).writeAll("})");
+                return try buf.toOwnedSlice(self.temp_allocator);
+            } else {
+                // Fallback: use existing PyList code
+                try buf.writer(self.temp_allocator).writeAll(code);
+                return try buf.toOwnedSlice(self.temp_allocator);
+            }
+        },
+        .name => {
+            // Variable reference - check type to determine conversion
+            const var_type = self.var_types.get(code);
+            if (var_type) |vtype| {
+                if (std.mem.eql(u8, vtype, "list")) {
+                    // PyAOT list - convert to Python list for FFI
+                    try buf.writer(self.temp_allocator).print("try python.convertPyListToPython({s})", .{code});
+                    return try buf.toOwnedSlice(self.temp_allocator);
+                } else if (std.mem.eql(u8, vtype, "string") or
+                    std.mem.eql(u8, vtype, "dict") or
+                    std.mem.eql(u8, vtype, "pyobject")) {
+                    // Already a PyObject type (but not list)
+                    try buf.writer(self.temp_allocator).writeAll(code);
+                    return try buf.toOwnedSlice(self.temp_allocator);
+                } else {
+                    // Primitive type (i64, f64, bool) - convert
+                    try buf.writer(self.temp_allocator).print("try python.fromInt({s})", .{code});
+                    return try buf.toOwnedSlice(self.temp_allocator);
+                }
+            }
+            // Unknown type, assume it's already suitable
+            try buf.writer(self.temp_allocator).writeAll(code);
+            return try buf.toOwnedSlice(self.temp_allocator);
+        },
+        else => {
+            // Other expressions - assume they're already PyObjects
+            try buf.writer(self.temp_allocator).writeAll(code);
+            return try buf.toOwnedSlice(self.temp_allocator);
+        },
     }
 }

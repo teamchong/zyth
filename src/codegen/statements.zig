@@ -176,67 +176,81 @@ fn visitAssign(self: *ZigCodeGenerator, assign: ast.Node.Assign) CodegenError!vo
                             }
                         },
                         .attribute => |attr| {
-                            // Method call - determine return type based on method name
-                            const method_name = attr.attr;
-
-                            // String methods that return strings
-                            const string_methods = [_][]const u8{
-                                "upper", "lower", "strip", "lstrip", "rstrip",
-                                "replace", "capitalize", "title", "swapcase"
-                            };
-
-                            // List methods that return lists
-                            const list_methods = [_][]const u8{
-                                "copy", "reversed"
-                            };
-
-                            // Methods that return primitive integers (not PyObjects)
-                            const int_methods = [_][]const u8{
-                                "index",  // List.index() returns primitive i64
-                                "count"   // List.count() returns primitive i64
-                            };
-
-                            // Check if it's a string method
-                            var is_string_method = false;
-                            for (string_methods) |sm| {
-                                if (std.mem.eql(u8, method_name, sm)) {
-                                    is_string_method = true;
-                                    break;
+                            // Check if this is a Python module function call (e.g., np.array)
+                            const is_python_call = blk: {
+                                if (attr.value.* == .name) {
+                                    if (self.imported_modules.contains(attr.value.name.id)) {
+                                        break :blk true;
+                                    }
                                 }
-                            }
+                                break :blk false;
+                            };
 
-                            if (is_string_method) {
-                                try self.var_types.put(var_name, "string");
-                            } else {
-                                // Check if it's a list method
-                                var is_list_method = false;
-                                for (list_methods) |lm| {
-                                    if (std.mem.eql(u8, method_name, lm)) {
-                                        is_list_method = true;
+                            // Skip type tracking for Python C API function calls
+                            // These return *anyopaque and are managed by Python's refcounting
+                            if (!is_python_call) {
+                                // Method call - determine return type based on method name
+                                const method_name = attr.attr;
+
+                                // String methods that return strings
+                                const string_methods = [_][]const u8{
+                                    "upper", "lower", "strip", "lstrip", "rstrip",
+                                    "replace", "capitalize", "title", "swapcase"
+                                };
+
+                                // List methods that return lists
+                                const list_methods = [_][]const u8{
+                                    "copy", "reversed"
+                                };
+
+                                // Methods that return primitive integers (not PyObjects)
+                                const int_methods = [_][]const u8{
+                                    "index",  // List.index() returns primitive i64
+                                    "count"   // List.count() returns primitive i64
+                                };
+
+                                // Check if it's a string method
+                                var is_string_method = false;
+                                for (string_methods) |sm| {
+                                    if (std.mem.eql(u8, method_name, sm)) {
+                                        is_string_method = true;
                                         break;
                                     }
                                 }
 
-                                if (is_list_method) {
-                                    try self.var_types.put(var_name, "list");
-                                } else if (std.mem.eql(u8, method_name, "split")) {
-                                    // split() returns a list
-                                    try self.var_types.put(var_name, "list");
+                                if (is_string_method) {
+                                    try self.var_types.put(var_name, "string");
                                 } else {
-                                    // Check if it's an int method
-                                    var is_int_method = false;
-                                    for (int_methods) |im| {
-                                        if (std.mem.eql(u8, method_name, im)) {
-                                            is_int_method = true;
+                                    // Check if it's a list method
+                                    var is_list_method = false;
+                                    for (list_methods) |lm| {
+                                        if (std.mem.eql(u8, method_name, lm)) {
+                                            is_list_method = true;
                                             break;
                                         }
                                     }
 
-                                    if (is_int_method) {
-                                        try self.var_types.put(var_name, "int");
+                                    if (is_list_method) {
+                                        try self.var_types.put(var_name, "list");
+                                    } else if (std.mem.eql(u8, method_name, "split")) {
+                                        // split() returns a list
+                                        try self.var_types.put(var_name, "list");
                                     } else {
-                                        // Default to pyobject for unknown methods
-                                        try self.var_types.put(var_name, "pyobject");
+                                        // Check if it's an int method
+                                        var is_int_method = false;
+                                        for (int_methods) |im| {
+                                            if (std.mem.eql(u8, method_name, im)) {
+                                                is_int_method = true;
+                                                break;
+                                            }
+                                        }
+
+                                        if (is_int_method) {
+                                            try self.var_types.put(var_name, "int");
+                                        } else {
+                                            // Default to pyobject for unknown methods
+                                            try self.var_types.put(var_name, "pyobject");
+                                        }
                                     }
                                 }
                             }
@@ -594,10 +608,10 @@ fn visitImport(self: *ZigCodeGenerator, import_node: ast.Node.Import) CodegenErr
     );
     try self.emitOwned(try buf.toOwnedSlice(self.temp_allocator));
 
-    // Suppress unused warning
-    var buf2 = std.ArrayList(u8){};
-    try buf2.writer(self.temp_allocator).print("_ = {s};", .{alias});
-    try self.emitOwned(try buf2.toOwnedSlice(self.temp_allocator));
+    // Track this module name for attribute access
+    try self.imported_modules.put(alias, {});
+
+    // Don't add discard statement - module will be used for attribute access
 }
 
 /// Generate code for from-import statement
