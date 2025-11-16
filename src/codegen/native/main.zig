@@ -12,6 +12,7 @@ const json = @import("json.zig");
 const http = @import("http.zig");
 const async_mod = @import("async.zig");
 const builtins = @import("builtins.zig");
+const methods = @import("methods.zig");
 const analyzer = @import("analyzer.zig");
 
 /// Error set for code generation
@@ -441,6 +442,21 @@ pub const NativeCodegen = struct {
                     try async_mod.genAsyncioSleep(self, call.args);
                     return;
                 }
+            }
+        }
+
+        // Handle method calls (obj.method())
+        if (call.func.* == .attribute) {
+            const method_name = call.func.attribute.attr;
+
+            if (std.mem.eql(u8, method_name, "split")) {
+                try methods.genSplit(self, call.func.attribute.value.*, call.args);
+                return;
+            }
+
+            if (std.mem.eql(u8, method_name, "append")) {
+                try methods.genAppend(self, call.func.attribute.value.*, call.args);
+                return;
             }
         }
 

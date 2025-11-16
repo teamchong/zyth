@@ -56,8 +56,45 @@ pub fn genFloat(self: *NativeCodegen, args: []ast.Node) CodegenError!void {
     try self.output.appendSlice(self.allocator, ")");
 }
 
-// TODO: Implement built-in functions
+/// Note: range() is handled specially in for-loops by genRangeLoop() in main.zig
+/// It's not a standalone function but a loop optimization that generates:
+/// - range(n) → while (i < n)
+/// - range(start, end) → while (i < end) starting from start
+/// - range(start, end, step) → while (i < end) with custom increment
+
+/// Generate code for enumerate(iterable)
+/// Returns: iterator with (index, value) tuples
+/// Currently not supported - needs Zig iterator implementation
+pub fn genEnumerate(self: *NativeCodegen, args: []ast.Node) CodegenError!void {
+    _ = args;
+    // For now: compile error placeholder
+    // TODO: Needs Zig iterator support with tuple unpacking
+    // Would generate something like:
+    // var idx: usize = 0;
+    // for (iterable) |item| {
+    //     defer idx += 1;
+    //     // use idx and item
+    // }
+    try self.output.appendSlice(self.allocator,
+        "@compileError(\"enumerate() not yet supported\")");
+}
+
+/// Generate code for zip(iter1, iter2, ...)
+/// Returns: iterator of tuples
+/// Currently not supported - needs Zig multi-iterator implementation
+pub fn genZip(self: *NativeCodegen, args: []ast.Node) CodegenError!void {
+    _ = args;
+    // For now: compile error placeholder
+    // TODO: Needs Zig multi-iterator support with tuple packing
+    // Would generate something like:
+    // var i: usize = 0;
+    // while (i < @min(iter1.len, iter2.len)) : (i += 1) {
+    //     const tuple = .{ iter1[i], iter2[i] };
+    //     // use tuple
+    // }
+    try self.output.appendSlice(self.allocator,
+        "@compileError(\"zip() not yet supported\")");
+}
+
+// TODO: Implement more built-in functions
 // - bool(obj) -> bool
-// - range(n) / range(start, end) / range(start, end, step)
-// - enumerate(iterable)
-// - zip(iter1, iter2, ...)
