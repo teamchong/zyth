@@ -14,6 +14,7 @@ const async_mod = @import("async.zig");
 const builtins = @import("builtins.zig");
 const methods = @import("methods.zig");
 const analyzer = @import("analyzer.zig");
+const dispatch = @import("dispatch.zig");
 
 /// Error set for code generation
 pub const CodegenError = error{
@@ -58,7 +59,15 @@ pub const NativeCodegen = struct {
         }
         try self.emit("\n");
 
-        // PHASE 3: Generate main function
+        // PHASE 3: Generate function definitions (before main)
+        for (module.body) |stmt| {
+            if (stmt == .function_def) {
+                try self.genFunctionDef(stmt.function_def);
+                try self.emit("\n");
+            }
+        }
+
+        // PHASE 4: Generate main function
         try self.emit("pub fn main() !void {\n");
         self.indent();
 
@@ -72,9 +81,11 @@ pub const NativeCodegen = struct {
             try self.emit("const allocator = gpa.allocator();\n\n");
         }
 
-        // PHASE 4: Generate statements
+        // PHASE 5: Generate statements (skip function defs - already handled)
         for (module.body) |stmt| {
-            try self.generateStmt(stmt);
+            if (stmt != .function_def) {
+                try self.generateStmt(stmt);
+            }
         }
 
         self.dedent();
@@ -90,9 +101,62 @@ pub const NativeCodegen = struct {
             .if_stmt => |if_stmt| try self.genIf(if_stmt),
             .while_stmt => |while_stmt| try self.genWhile(while_stmt),
             .for_stmt => |for_stmt| try self.genFor(for_stmt),
+            .return_stmt => |ret| try self.genReturn(ret),
             .import_stmt => {},  // Native modules - no import needed
             else => {},
         }
+    }
+
+    fn genFunctionDef(self: *NativeCodegen, func: ast.Node.FunctionDef) CodegenError!void {
+        // Generate function signature: fn name(param: type, ...) return_type {
+        try self.emit("fn ");
+        try self.emit(func.name);
+        try self.emit("(");
+
+        // Generate parameters
+        for (func.args, 0..) |arg, i| {
+            if (i > 0) try self.emit(", ");
+            try self.emit(arg.name);
+            try self.emit(": ");
+            // Convert Python type hint to Zig type
+            const zig_type = pythonTypeToZig(arg.type_annotation);
+            try self.emit(zig_type);
+        }
+
+        try self.emit(") ");
+
+        // Return type - for now assume i64 if not void
+        // TODO: Proper return type inference
+        try self.emit("i64 {\n");
+
+        self.indent();
+
+        // Generate function body
+        for (func.body) |stmt| {
+            try self.generateStmt(stmt);
+        }
+
+        self.dedent();
+        try self.emit("}\n");
+    }
+
+    fn genReturn(self: *NativeCodegen, ret: ast.Node.Return) CodegenError!void {
+        try self.emitIndent();
+        try self.emit("return ");
+        if (ret.value) |value| {
+            try self.genExpr(value.*);
+        }
+        try self.emit(";\n");
+    }
+
+    fn pythonTypeToZig(type_hint: ?[]const u8) []const u8 {
+        if (type_hint) |hint| {
+            if (std.mem.eql(u8, hint, "int")) return "i64";
+            if (std.mem.eql(u8, hint, "float")) return "f64";
+            if (std.mem.eql(u8, hint, "bool")) return "bool";
+            if (std.mem.eql(u8, hint, "str")) return "[]const u8";
+        }
+        return "anytype";  // fallback
     }
 
     fn genAssign(self: *NativeCodegen, assign: ast.Node.Assign) CodegenError!void {
@@ -106,12 +170,25 @@ pub const NativeCodegen = struct {
                 const is_arraylist = (assign.value.* == .list and assign.value.list.elts.len == 0);
                 const is_dict = (assign.value.* == .dict);
 
-                // Check if value is upper() or lower() which allocate strings
+                // Check if value allocates memory
                 const is_allocated_string = blk: {
-                    if (assign.value.* == .call and assign.value.call.func.* == .attribute) {
-                        const method_name = assign.value.call.func.attribute.attr;
-                        if (std.mem.eql(u8, method_name, "upper") or std.mem.eql(u8, method_name, "lower")) {
-                            break :blk true;
+                    if (assign.value.* == .call) {
+                        // Method calls that allocate: upper(), lower(), replace()
+                        if (assign.value.call.func.* == .attribute) {
+                            const method_name = assign.value.call.func.attribute.attr;
+                            if (std.mem.eql(u8, method_name, "upper") or
+                                std.mem.eql(u8, method_name, "lower") or
+                                std.mem.eql(u8, method_name, "replace")) {
+                                break :blk true;
+                            }
+                        }
+                        // Built-in functions that allocate: sorted(), reversed()
+                        if (assign.value.call.func.* == .name) {
+                            const func_name = assign.value.call.func.name.id;
+                            if (std.mem.eql(u8, func_name, "sorted") or
+                                std.mem.eql(u8, func_name, "reversed")) {
+                                break :blk true;
+                            }
                         }
                     }
                     break :blk false;
@@ -426,283 +503,13 @@ pub const NativeCodegen = struct {
     }
 
     fn genCall(self: *NativeCodegen, call: ast.Node.Call) CodegenError!void {
-        // Check for module.function() calls (json.loads, http.get, etc.)
-        if (call.func.* == .attribute) {
-            const attr = call.func.attribute;
-            if (attr.value.* == .name) {
-                const module_name = attr.value.name.id;
-                const func_name = attr.attr;
+        // Try to dispatch to specialized handler
+        const dispatched = try dispatch.dispatchCall(self, call);
+        if (dispatched) return;
 
-                // Handle json.loads()
-                if (std.mem.eql(u8, module_name, "json") and std.mem.eql(u8, func_name, "loads")) {
-                    try json.genJsonLoads(self, call.args);
-                    return;
-                }
-
-                // Handle json.dumps()
-                if (std.mem.eql(u8, module_name, "json") and std.mem.eql(u8, func_name, "dumps")) {
-                    try json.genJsonDumps(self, call.args);
-                    return;
-                }
-
-                // Handle http.get()
-                if (std.mem.eql(u8, module_name, "http") and std.mem.eql(u8, func_name, "get")) {
-                    try http.genHttpGet(self, call.args);
-                    return;
-                }
-
-                // Handle http.post()
-                if (std.mem.eql(u8, module_name, "http") and std.mem.eql(u8, func_name, "post")) {
-                    try http.genHttpPost(self, call.args);
-                    return;
-                }
-
-                // Handle asyncio.run()
-                if (std.mem.eql(u8, module_name, "asyncio") and std.mem.eql(u8, func_name, "run")) {
-                    try async_mod.genAsyncioRun(self, call.args);
-                    return;
-                }
-
-                // Handle asyncio.gather()
-                if (std.mem.eql(u8, module_name, "asyncio") and std.mem.eql(u8, func_name, "gather")) {
-                    try async_mod.genAsyncioGather(self, call.args);
-                    return;
-                }
-
-                // Handle asyncio.create_task()
-                if (std.mem.eql(u8, module_name, "asyncio") and std.mem.eql(u8, func_name, "create_task")) {
-                    try async_mod.genAsyncioCreateTask(self, call.args);
-                    return;
-                }
-
-                // Handle asyncio.sleep()
-                if (std.mem.eql(u8, module_name, "asyncio") and std.mem.eql(u8, func_name, "sleep")) {
-                    try async_mod.genAsyncioSleep(self, call.args);
-                    return;
-                }
-            }
-        }
-
-        // Handle method calls (obj.method())
-        if (call.func.* == .attribute) {
-            const method_name = call.func.attribute.attr;
-
-            if (std.mem.eql(u8, method_name, "split")) {
-                try methods.genSplit(self, call.func.attribute.value.*, call.args);
-                return;
-            }
-
-            if (std.mem.eql(u8, method_name, "append")) {
-                try methods.genAppend(self, call.func.attribute.value.*, call.args);
-                return;
-            }
-
-            if (std.mem.eql(u8, method_name, "upper")) {
-                try methods.genUpper(self, call.func.attribute.value.*, call.args);
-                return;
-            }
-
-            if (std.mem.eql(u8, method_name, "lower")) {
-                try methods.genLower(self, call.func.attribute.value.*, call.args);
-                return;
-            }
-
-            if (std.mem.eql(u8, method_name, "strip")) {
-                try methods.genStrip(self, call.func.attribute.value.*, call.args);
-                return;
-            }
-
-            if (std.mem.eql(u8, method_name, "replace")) {
-                try methods.genReplace(self, call.func.attribute.value.*, call.args);
-                return;
-            }
-
-            // String methods - more
-            if (std.mem.eql(u8, method_name, "join")) {
-                try methods.genJoin(self, call.func.attribute.value.*, call.args);
-                return;
-            }
-            if (std.mem.eql(u8, method_name, "startswith")) {
-                try methods.genStartswith(self, call.func.attribute.value.*, call.args);
-                return;
-            }
-            if (std.mem.eql(u8, method_name, "endswith")) {
-                try methods.genEndswith(self, call.func.attribute.value.*, call.args);
-                return;
-            }
-            if (std.mem.eql(u8, method_name, "find")) {
-                try methods.genFind(self, call.func.attribute.value.*, call.args);
-                return;
-            }
-
-            // List methods
-            if (std.mem.eql(u8, method_name, "pop")) {
-                try methods.genPop(self, call.func.attribute.value.*, call.args);
-                return;
-            }
-            if (std.mem.eql(u8, method_name, "extend")) {
-                try methods.genExtend(self, call.func.attribute.value.*, call.args);
-                return;
-            }
-            if (std.mem.eql(u8, method_name, "insert")) {
-                try methods.genInsert(self, call.func.attribute.value.*, call.args);
-                return;
-            }
-            if (std.mem.eql(u8, method_name, "remove")) {
-                try methods.genRemove(self, call.func.attribute.value.*, call.args);
-                return;
-            }
-            if (std.mem.eql(u8, method_name, "index")) {
-                try methods.genIndex(self, call.func.attribute.value.*, call.args);
-                return;
-            }
-            if (std.mem.eql(u8, method_name, "count")) {
-                try methods.genCount(self, call.func.attribute.value.*, call.args);
-                return;
-            }
-            if (std.mem.eql(u8, method_name, "reverse")) {
-                try methods.genReverse(self, call.func.attribute.value.*, call.args);
-                return;
-            }
-            if (std.mem.eql(u8, method_name, "sort")) {
-                try methods.genSort(self, call.func.attribute.value.*, call.args);
-                return;
-            }
-            if (std.mem.eql(u8, method_name, "clear")) {
-                try methods.genClear(self, call.func.attribute.value.*, call.args);
-                return;
-            }
-            if (std.mem.eql(u8, method_name, "copy")) {
-                try methods.genCopy(self, call.func.attribute.value.*, call.args);
-                return;
-            }
-
-            // Dict methods
-            if (std.mem.eql(u8, method_name, "get")) {
-                try methods.genGet(self, call.func.attribute.value.*, call.args);
-                return;
-            }
-            if (std.mem.eql(u8, method_name, "keys")) {
-                try methods.genKeys(self, call.func.attribute.value.*, call.args);
-                return;
-            }
-            if (std.mem.eql(u8, method_name, "values")) {
-                try methods.genValues(self, call.func.attribute.value.*, call.args);
-                return;
-            }
-            if (std.mem.eql(u8, method_name, "items")) {
-                try methods.genItems(self, call.func.attribute.value.*, call.args);
-                return;
-            }
-        }
-
-        // Check for built-in functions (len, str, int, float, etc.)
+        // Fallback: regular function call
         if (call.func.* == .name) {
             const func_name = call.func.name.id;
-
-            // Handle len()
-            if (std.mem.eql(u8, func_name, "len")) {
-                try builtins.genLen(self, call.args);
-                return;
-            }
-
-            // Handle str()
-            if (std.mem.eql(u8, func_name, "str")) {
-                try builtins.genStr(self, call.args);
-                return;
-            }
-
-            // Handle int()
-            if (std.mem.eql(u8, func_name, "int")) {
-                try builtins.genInt(self, call.args);
-                return;
-            }
-
-            // Handle float()
-            if (std.mem.eql(u8, func_name, "float")) {
-                try builtins.genFloat(self, call.args);
-                return;
-            }
-
-            // Handle bool()
-            if (std.mem.eql(u8, func_name, "bool")) {
-                try builtins.genBool(self, call.args);
-                return;
-            }
-
-            // Math functions
-            if (std.mem.eql(u8, func_name, "abs")) {
-                try builtins.genAbs(self, call.args);
-                return;
-            }
-            if (std.mem.eql(u8, func_name, "min")) {
-                try builtins.genMin(self, call.args);
-                return;
-            }
-            if (std.mem.eql(u8, func_name, "max")) {
-                try builtins.genMax(self, call.args);
-                return;
-            }
-            if (std.mem.eql(u8, func_name, "sum")) {
-                try builtins.genSum(self, call.args);
-                return;
-            }
-            if (std.mem.eql(u8, func_name, "round")) {
-                try builtins.genRound(self, call.args);
-                return;
-            }
-            if (std.mem.eql(u8, func_name, "pow")) {
-                try builtins.genPow(self, call.args);
-                return;
-            }
-
-            // Collection functions
-            if (std.mem.eql(u8, func_name, "all")) {
-                try builtins.genAll(self, call.args);
-                return;
-            }
-            if (std.mem.eql(u8, func_name, "any")) {
-                try builtins.genAny(self, call.args);
-                return;
-            }
-            if (std.mem.eql(u8, func_name, "sorted")) {
-                try builtins.genSorted(self, call.args);
-                return;
-            }
-            if (std.mem.eql(u8, func_name, "reversed")) {
-                try builtins.genReversed(self, call.args);
-                return;
-            }
-            if (std.mem.eql(u8, func_name, "map")) {
-                try builtins.genMap(self, call.args);
-                return;
-            }
-            if (std.mem.eql(u8, func_name, "filter")) {
-                try builtins.genFilter(self, call.args);
-                return;
-            }
-
-            // String/char functions
-            if (std.mem.eql(u8, func_name, "chr")) {
-                try builtins.genChr(self, call.args);
-                return;
-            }
-            if (std.mem.eql(u8, func_name, "ord")) {
-                try builtins.genOrd(self, call.args);
-                return;
-            }
-
-            // Type functions
-            if (std.mem.eql(u8, func_name, "type")) {
-                try builtins.genType(self, call.args);
-                return;
-            }
-            if (std.mem.eql(u8, func_name, "isinstance")) {
-                try builtins.genIsinstance(self, call.args);
-                return;
-            }
-
-            // Fallback: regular function call
             try self.output.appendSlice(self.allocator, func_name);
             try self.output.appendSlice(self.allocator, "(");
 
