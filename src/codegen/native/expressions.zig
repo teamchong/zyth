@@ -19,6 +19,7 @@ pub fn genExpr(self: *NativeCodegen, node: ast.Node) CodegenError!void {
         .list => |l| try genList(self, l),
         .dict => |d| try genDict(self, d),
         .subscript => |s| try genSubscript(self, s),
+        .attribute => |a| try genAttribute(self, a),
         else => {},
     }
 }
@@ -154,9 +155,45 @@ fn genCall(self: *NativeCodegen, call: ast.Node.Call) CodegenError!void {
     const dispatched = try dispatch.dispatchCall(self, call);
     if (dispatched) return;
 
-    // Fallback: regular function call
+    // Handle method calls (obj.method())
+    if (call.func.* == .attribute) {
+        const attr = call.func.attribute;
+
+        // Generic method call: obj.method(args)
+        try genExpr(self, attr.value.*);
+        try self.output.appendSlice(self.allocator, ".");
+        try self.output.appendSlice(self.allocator, attr.attr);
+        try self.output.appendSlice(self.allocator, "(");
+
+        for (call.args, 0..) |arg, i| {
+            if (i > 0) try self.output.appendSlice(self.allocator, ", ");
+            try genExpr(self, arg);
+        }
+
+        try self.output.appendSlice(self.allocator, ")");
+        return;
+    }
+
+    // Check for class instantiation (ClassName() -> ClassName.init())
     if (call.func.* == .name) {
         const func_name = call.func.name.id;
+
+        // If name starts with uppercase, it's a class constructor
+        if (func_name.len > 0 and std.ascii.isUpper(func_name[0])) {
+            // Class instantiation: Counter(10) -> Counter.init(10)
+            try self.output.appendSlice(self.allocator, func_name);
+            try self.output.appendSlice(self.allocator, ".init(");
+
+            for (call.args, 0..) |arg, i| {
+                if (i > 0) try self.output.appendSlice(self.allocator, ", ");
+                try genExpr(self, arg);
+            }
+
+            try self.output.appendSlice(self.allocator, ")");
+            return;
+        }
+
+        // Fallback: regular function call
         try self.output.appendSlice(self.allocator, func_name);
         try self.output.appendSlice(self.allocator, "(");
 
@@ -244,4 +281,12 @@ fn genSubscript(self: *NativeCodegen, subscript: ast.Node.Subscript) CodegenErro
     }
 
     try self.output.appendSlice(self.allocator, "]");
+}
+
+/// Generate attribute access (obj.attr)
+fn genAttribute(self: *NativeCodegen, attr: ast.Node.Attribute) CodegenError!void {
+    // self.x -> self.x (direct translation in Zig)
+    try genExpr(self, attr.value.*);
+    try self.output.appendSlice(self.allocator, ".");
+    try self.output.appendSlice(self.allocator, attr.attr);
 }

@@ -67,6 +67,177 @@ pub fn genFunctionDef(self: *NativeCodegen, func: ast.Node.FunctionDef) CodegenE
     try self.emit("}\n");
 }
 
+/// Generate class definition with __init__ constructor
+pub fn genClassDef(self: *NativeCodegen, class: ast.Node.ClassDef) CodegenError!void {
+    // Find __init__ method to determine struct fields
+    var init_method: ?ast.Node.FunctionDef = null;
+    for (class.body) |stmt| {
+        if (stmt == .function_def and std.mem.eql(u8, stmt.function_def.name, "__init__")) {
+            init_method = stmt.function_def;
+            break;
+        }
+    }
+
+    // Generate: const ClassName = struct {
+    try self.emitIndent();
+    try self.output.writer(self.allocator).print("const {s} = struct {{\n", .{class.name});
+    self.indent();
+
+    // Extract fields from __init__ body (self.x = ...)
+    // We map field assignments to parameter types
+    if (init_method) |init| {
+        for (init.body) |stmt| {
+            if (stmt == .assign) {
+                const assign = stmt.assign;
+                // Check if target is self.attribute
+                if (assign.targets.len > 0 and assign.targets[0] == .attribute) {
+                    const attr = assign.targets[0].attribute;
+                    if (attr.value.* == .name and std.mem.eql(u8, attr.value.name.id, "self")) {
+                        // Found field: self.x = y
+                        const field_name = attr.attr;
+
+                        // Determine field type
+                        // If value is a parameter name, use parameter's type annotation
+                        var field_type_str: []const u8 = "i64"; // default
+                        if (assign.value.* == .name) {
+                            const value_name = assign.value.name.id;
+                            // Look up parameter type
+                            for (init.args) |arg| {
+                                if (std.mem.eql(u8, arg.name, value_name)) {
+                                    field_type_str = pythonTypeToZig(arg.type_annotation);
+                                    break;
+                                }
+                            }
+                        } else {
+                            // For non-parameter values, try to infer
+                            const inferred = try self.type_inferrer.inferExpr(assign.value.*);
+                            field_type_str = switch (inferred) {
+                                .int => "i64",
+                                .float => "f64",
+                                .bool => "bool",
+                                .string => "[]const u8",
+                                else => "i64",
+                            };
+                        }
+
+                        try self.emitIndent();
+                        try self.output.writer(self.allocator).print("{s}: {s},\n", .{ field_name, field_type_str });
+                    }
+                }
+            }
+        }
+    }
+
+    // Generate init() method from __init__
+    if (init_method) |init| {
+        try self.output.appendSlice(self.allocator, "\n");
+        try self.emitIndent();
+        try self.output.writer(self.allocator).print("pub fn init(", .{});
+
+        // Parameters (skip 'self')
+        var first = true;
+        for (init.args) |arg| {
+            if (std.mem.eql(u8, arg.name, "self")) continue;
+
+            if (!first) try self.output.appendSlice(self.allocator, ", ");
+            first = false;
+
+            try self.output.writer(self.allocator).print("{s}: ", .{arg.name});
+
+            // Type annotation
+            const param_type = pythonTypeToZig(arg.type_annotation);
+            try self.output.appendSlice(self.allocator, param_type);
+        }
+
+        try self.output.writer(self.allocator).print(") {s} {{\n", .{class.name});
+        self.indent();
+
+        // Generate return statement with field initializers
+        try self.emitIndent();
+        try self.output.writer(self.allocator).print("return {s}{{\n", .{class.name});
+        self.indent();
+
+        // Extract field assignments from __init__ body
+        for (init.body) |stmt| {
+            if (stmt == .assign) {
+                const assign = stmt.assign;
+                if (assign.targets.len > 0 and assign.targets[0] == .attribute) {
+                    const attr = assign.targets[0].attribute;
+                    if (attr.value.* == .name and std.mem.eql(u8, attr.value.name.id, "self")) {
+                        const field_name = attr.attr;
+
+                        try self.emitIndent();
+                        try self.output.writer(self.allocator).print(".{s} = ", .{field_name});
+                        try self.genExpr(assign.value.*);
+                        try self.output.appendSlice(self.allocator, ",\n");
+                    }
+                }
+            }
+        }
+
+        self.dedent();
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "};\n");
+
+        self.dedent();
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "}\n");
+    }
+
+    // Generate regular methods (non-__init__)
+    for (class.body) |stmt| {
+        if (stmt == .function_def) {
+            const method = stmt.function_def;
+            if (std.mem.eql(u8, method.name, "__init__")) continue;
+
+            try self.output.appendSlice(self.allocator, "\n");
+            try self.emitIndent();
+            try self.output.writer(self.allocator).print("pub fn {s}(self: *", .{method.name});
+            try self.output.appendSlice(self.allocator, class.name);
+
+            // Add other parameters (skip 'self')
+            for (method.args) |arg| {
+                if (std.mem.eql(u8, arg.name, "self")) continue;
+                try self.output.appendSlice(self.allocator, ", ");
+                try self.output.writer(self.allocator).print("{s}: ", .{arg.name});
+                const param_type = pythonTypeToZig(arg.type_annotation);
+                try self.output.appendSlice(self.allocator, param_type);
+            }
+
+            try self.output.appendSlice(self.allocator, ") ");
+
+            // Determine return type
+            if (hasReturnStatement(method.body)) {
+                try self.output.appendSlice(self.allocator, "i64");
+            } else {
+                try self.output.appendSlice(self.allocator, "void");
+            }
+
+            try self.output.appendSlice(self.allocator, " {\n");
+            self.indent();
+
+            // Push new scope for method body
+            try self.pushScope();
+
+            // Generate method body
+            for (method.body) |method_stmt| {
+                try self.generateStmt(method_stmt);
+            }
+
+            // Pop scope when exiting method
+            self.popScope();
+
+            self.dedent();
+            try self.emitIndent();
+            try self.output.appendSlice(self.allocator, "}\n");
+        }
+    }
+
+    self.dedent();
+    try self.emitIndent();
+    try self.output.appendSlice(self.allocator, "};\n");
+}
+
 /// Generate return statement
 pub fn genReturn(self: *NativeCodegen, ret: ast.Node.Return) CodegenError!void {
     try self.emitIndent();
@@ -116,9 +287,17 @@ pub fn genAssign(self: *NativeCodegen, assign: ast.Node.Assign) CodegenError!voi
         if (target == .name) {
             const var_name = target.name.id;
 
-            // ArrayLists and dicts need var instead of const for mutation
+            // ArrayLists, dicts, and class instances need var instead of const for mutation
             const is_arraylist = (assign.value.* == .list and assign.value.list.elts.len == 0);
             const is_dict = (assign.value.* == .dict);
+            const is_class_instance = blk: {
+                if (assign.value.* == .call and assign.value.call.func.* == .name) {
+                    const name = assign.value.call.func.name.id;
+                    // Class names start with uppercase
+                    break :blk name.len > 0 and std.ascii.isUpper(name[0]);
+                }
+                break :blk false;
+            };
 
             // Check if value allocates memory
             const is_allocated_string = blk: {
@@ -165,7 +344,7 @@ pub fn genAssign(self: *NativeCodegen, assign: ast.Node.Assign) CodegenError!voi
                     .call => false,   // Function calls
                     else => false,
                 };
-                const needs_var = is_arraylist or is_dict or
+                const needs_var = is_arraylist or is_dict or is_class_instance or
                                  (is_simple_literal and (value_type == .int or value_type == .float or value_type == .bool));
 
                 if (needs_var) {
@@ -214,6 +393,13 @@ pub fn genAssign(self: *NativeCodegen, assign: ast.Node.Assign) CodegenError!voi
                 try self.emitIndent();
                 try self.output.writer(self.allocator).print("defer allocator.free({s});\n", .{var_name});
             }
+        } else if (target == .attribute) {
+            // Handle attribute assignment (self.x = value)
+            try self.emitIndent();
+            try self.genExpr(target);
+            try self.output.appendSlice(self.allocator, " = ");
+            try self.genExpr(assign.value.*);
+            try self.output.appendSlice(self.allocator, ";\n");
         }
     }
 }
