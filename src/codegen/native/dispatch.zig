@@ -136,7 +136,28 @@ pub fn dispatchCall(self: *NativeCodegen, call: ast.Node.Call) CodegenError!bool
             return true;
         }
         if (std.mem.eql(u8, method_name, "count")) {
-            try methods.genCount(self, call.func.attribute.value.*, call.args);
+            // Check if it's a list or string - lists use list.genCount, strings use string.genCount
+            const obj = call.func.attribute.value.*;
+            const is_list = blk: {
+                if (obj == .name) {
+                    const var_name = obj.name.id;
+                    if (self.type_inferrer.var_types.get(var_name)) |var_type| {
+                        break :blk switch (var_type) {
+                            .list => true,
+                            else => false,
+                        };
+                    }
+                }
+                break :blk false;
+            };
+
+            if (is_list) {
+                const genListCount = @import("methods/list.zig").genCount;
+                try genListCount(self, call.func.attribute.value.*, call.args);
+            } else {
+                // Default to string.genCount
+                try methods.genCount(self, call.func.attribute.value.*, call.args);
+            }
             return true;
         }
         if (std.mem.eql(u8, method_name, "reverse")) {

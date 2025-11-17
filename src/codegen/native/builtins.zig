@@ -14,9 +14,18 @@ pub fn genLen(self: *NativeCodegen, args: []ast.Node) CodegenError!void {
 
     // Check if argument is ArrayList (detected as .list type), dict, or tuple
     const arg_type = self.type_inferrer.inferExpr(args[0]) catch .unknown;
-    const is_arraylist = (arg_type == .list);
-    const is_dict = (arg_type == .dict);
-    const is_tuple = (arg_type == .tuple);
+    const is_arraylist = switch (arg_type) {
+        .list => true,
+        else => false,
+    };
+    const is_dict = switch (arg_type) {
+        .dict => true,
+        else => false,
+    };
+    const is_tuple = switch (arg_type) {
+        .tuple => true,
+        else => false,
+    };
 
     // Generate:
     // - obj.items.len for ArrayList

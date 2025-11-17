@@ -386,6 +386,17 @@ pub fn genExprStmt(self: *NativeCodegen, expr: ast.Node) CodegenError!void {
         try self.output.appendSlice(self.allocator, "_ = ");
     }
 
+    const before_len = self.output.items.len;
     try self.genExpr(expr);
-    try self.output.appendSlice(self.allocator, ";\n");
+
+    // Check if generated code ends with '}' (block statement)
+    // Blocks in statement position don't need semicolons
+    const generated = self.output.items[before_len..];
+    const ends_with_block = generated.len > 0 and generated[generated.len - 1] == '}';
+
+    if (ends_with_block) {
+        try self.output.appendSlice(self.allocator, "\n");
+    } else {
+        try self.output.appendSlice(self.allocator, ";\n");
+    }
 }

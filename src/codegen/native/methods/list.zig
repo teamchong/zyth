@@ -41,12 +41,12 @@ pub fn genPop(self: *NativeCodegen, obj: ast.Node, args: []ast.Node) CodegenErro
 pub fn genExtend(self: *NativeCodegen, obj: ast.Node, args: []ast.Node) CodegenError!void {
     if (args.len != 1) return;
 
-    // Generate: try list.appendSlice(allocator, other)
+    // Generate: try list.appendSlice(allocator, other.items)
     try self.output.appendSlice(self.allocator, "try ");
     try self.genExpr(obj);
     try self.output.appendSlice(self.allocator, ".appendSlice(allocator, ");
     try self.genExpr(args[0]);
-    try self.output.appendSlice(self.allocator, ")");
+    try self.output.appendSlice(self.allocator, ".items)");
 }
 
 /// Generate code for list.insert(index, item)
@@ -127,13 +127,26 @@ pub fn genCopy(self: *NativeCodegen, obj: ast.Node, args: []ast.Node) CodegenErr
 pub fn genIndex(self: *NativeCodegen, obj: ast.Node, args: []ast.Node) CodegenError!void {
     if (args.len != 1) return;
 
-    // Generate: std.mem.indexOfScalar(T, list, item).?
+    // Generate: std.mem.indexOfScalar(T, list.items, item).?
     // The .? asserts item exists (crashes if not found, like Python)
     try self.output.appendSlice(self.allocator, "std.mem.indexOfScalar(");
     // TODO: Need to infer element type
     try self.output.appendSlice(self.allocator, "i64, "); // Assume i64 for now
     try self.genExpr(obj);
-    try self.output.appendSlice(self.allocator, ", ");
+    try self.output.appendSlice(self.allocator, ".items, ");
     try self.genExpr(args[0]);
     try self.output.appendSlice(self.allocator, ").?");
+}
+
+/// Generate code for list.count(item)
+/// Returns number of occurrences of item
+pub fn genCount(self: *NativeCodegen, obj: ast.Node, args: []ast.Node) CodegenError!void {
+    if (args.len != 1) return;
+
+    // Generate: std.mem.count(T, list.items, &[_]T{item})
+    try self.output.appendSlice(self.allocator, "std.mem.count(i64, ");
+    try self.genExpr(obj);
+    try self.output.appendSlice(self.allocator, ".items, &[_]i64{");
+    try self.genExpr(args[0]);
+    try self.output.appendSlice(self.allocator, "})");
 }

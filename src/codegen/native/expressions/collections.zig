@@ -21,18 +21,37 @@ pub fn genList(self: *NativeCodegen, list: ast.Node.List) CodegenError!void {
     self.indent();
     try self.emitIndent();
 
-    // Infer element type
-    const elem_type = try self.type_inferrer.inferExpr(list.elts[0]);
+    // Infer element type using type widening
+    // Start with first element's type, then widen to accommodate all elements
+    var elem_type = try self.type_inferrer.inferExpr(list.elts[0]);
+
+    // Widen type to accommodate all elements
+    for (list.elts[1..]) |elem| {
+        const this_type = try self.type_inferrer.inferExpr(elem);
+        elem_type = elem_type.widen(this_type);
+    }
 
     try self.output.appendSlice(self.allocator, "var _list = std.ArrayList(");
     try elem_type.toZigType(self.allocator, &self.output);
     try self.output.appendSlice(self.allocator, "){};\n");
 
-    // Append each element
+    // Append each element (with type coercion if needed)
     for (list.elts) |elem| {
         try self.emitIndent();
         try self.output.appendSlice(self.allocator, "try _list.append(allocator, ");
-        try genExpr(self, elem);
+
+        // Check if we need to cast this element
+        const this_type = try self.type_inferrer.inferExpr(elem);
+        const needs_cast = (elem_type == .float and this_type == .int);
+
+        if (needs_cast) {
+            try self.output.appendSlice(self.allocator, "@as(f64, @floatFromInt(");
+            try genExpr(self, elem);
+            try self.output.appendSlice(self.allocator, "))");
+        } else {
+            try genExpr(self, elem);
+        }
+
         try self.output.appendSlice(self.allocator, ");\n");
     }
 

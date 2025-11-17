@@ -53,6 +53,32 @@ pub const NativeType = union(enum) {
             .unknown => try buf.appendSlice(allocator, "*runtime.PyObject"),
         }
     }
+
+    /// Promote/widen types for compatibility
+    /// Follows Python's type promotion hierarchy: int < float < string < unknown
+    pub fn widen(self: NativeType, other: NativeType) NativeType {
+        // Get tags for comparison
+        const self_tag = @as(std.meta.Tag(NativeType), self);
+        const other_tag = @as(std.meta.Tag(NativeType), other);
+
+        // If either is unknown, result is unknown (fallback to PyObject)
+        if (self_tag == .unknown or other_tag == .unknown) return .unknown;
+
+        // If types match, no widening needed
+        if (self_tag == other_tag) {
+            return self;
+        }
+
+        // String "wins" over everything (str() is universal)
+        if (self_tag == .string or other_tag == .string) return .string;
+
+        // Float can hold ints, so float "wins"
+        if ((self_tag == .float and other_tag == .int) or
+            (self_tag == .int and other_tag == .float)) return .float;
+
+        // Different incompatible types → fallback to unknown
+        return .unknown;
+    }
 };
 
 /// Error set for type inference

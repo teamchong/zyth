@@ -21,21 +21,25 @@ pub fn isNegativeConstant(node: ast.Node) bool {
 }
 
 /// Generate a slice index, handling negative indices
-/// If in_slice_context is true and we have __s available, convert negatives to __s.len - abs(index)
-pub fn genSliceIndex(self: *NativeCodegen, node: ast.Node, in_slice_context: bool) CodegenError!void {
+/// If in_slice_context is true and we have __s available, convert negatives to __s.items.len - abs(index) for lists
+/// Note: This assumes __s is available in the current scope (from the enclosing blk: { const __s = ... })
+/// For lists, __s.items.len is used; for strings/arrays, __s.len is used
+pub fn genSliceIndex(self: *NativeCodegen, node: ast.Node, in_slice_context: bool, is_list: bool) CodegenError!void {
     if (!in_slice_context) {
         try genExpr(self, node);
         return;
     }
 
+    const len_expr = if (is_list) "__s.items.len" else "__s.len";
+
     // Check for negative constant or unary minus
     if (node == .constant and node.constant.value == .int and node.constant.value.int < 0) {
         // Negative constant: -2 becomes max(0, __s.len - 2) to prevent underflow
         const abs_val = if (node.constant.value.int < 0) -node.constant.value.int else node.constant.value.int;
-        try self.output.writer(self.allocator).print("if (__s.len >= {d}) __s.len - {d} else 0", .{ abs_val, abs_val });
+        try self.output.writer(self.allocator).print("if ({s} >= {d}) {s} - {d} else 0", .{ len_expr, abs_val, len_expr, abs_val });
     } else if (node == .unaryop and node.unaryop.op == .USub) {
         // Unary minus: -x becomes saturating subtraction
-        try self.output.appendSlice(self.allocator, "__s.len -| ");
+        try self.output.writer(self.allocator).print("{s} -| ", .{len_expr});
         try genExpr(self, node.unaryop.operand.*);
     } else {
         // Positive index - use as-is
@@ -66,7 +70,7 @@ pub fn genSubscript(self: *NativeCodegen, subscript: ast.Node.Subscript) Codegen
                     try self.output.appendSlice(self.allocator, "blk: { const __s = ");
                     try genExpr(self, subscript.value.*);
                     try self.output.appendSlice(self.allocator, "; break :blk __s.items[");
-                    try genSliceIndex(self, subscript.slice.index.*, true);
+                    try genSliceIndex(self, subscript.slice.index.*, true, true);
                     try self.output.appendSlice(self.allocator, "]; }");
                 } else {
                     // Positive index - simple subscript
@@ -83,7 +87,7 @@ pub fn genSubscript(self: *NativeCodegen, subscript: ast.Node.Subscript) Codegen
                     try self.output.appendSlice(self.allocator, "blk: { const __s = ");
                     try genExpr(self, subscript.value.*);
                     try self.output.appendSlice(self.allocator, "; break :blk __s[");
-                    try genSliceIndex(self, subscript.slice.index.*, true);
+                    try genSliceIndex(self, subscript.slice.index.*, true, false);
                     try self.output.appendSlice(self.allocator, "]; }");
                 } else {
                     // Positive index - simple subscript
@@ -113,7 +117,7 @@ pub fn genSubscript(self: *NativeCodegen, subscript: ast.Node.Subscript) Codegen
                     try self.output.appendSlice(self.allocator, "; const __start: usize = ");
 
                     if (slice_range.lower) |lower| {
-                        try genSliceIndex(self, lower.*, true);
+                        try genSliceIndex(self, lower.*, true, false);
                     } else {
                         // Default start: 0 for positive step, len-1 for negative step
                         try self.output.appendSlice(self.allocator, "if (__step > 0) 0 else if (__s.len > 0) __s.len - 1 else 0");
@@ -123,7 +127,7 @@ pub fn genSubscript(self: *NativeCodegen, subscript: ast.Node.Subscript) Codegen
 
                     if (slice_range.upper) |upper| {
                         try self.output.appendSlice(self.allocator, "@intCast(");
-                        try genSliceIndex(self, upper.*, true);
+                        try genSliceIndex(self, upper.*, true, false);
                         try self.output.appendSlice(self.allocator, ")");
                     } else {
                         // Default end: len for positive step, -1 for negative step
@@ -143,21 +147,21 @@ pub fn genSubscript(self: *NativeCodegen, subscript: ast.Node.Subscript) Codegen
                     try self.output.appendSlice(self.allocator, "; const __start: usize = ");
 
                     if (slice_range.lower) |lower| {
-                        try genSliceIndex(self, lower.*, true);
+                        try genSliceIndex(self, lower.*, true, true);
                     } else {
                         // Default start: 0 for positive step, len-1 for negative step
-                        try self.output.appendSlice(self.allocator, "if (__step > 0) 0 else if (__s.len > 0) __s.len - 1 else 0");
+                        try self.output.appendSlice(self.allocator, "if (__step > 0) 0 else if (__s.items.len > 0) __s.items.len - 1 else 0");
                     }
 
                     try self.output.appendSlice(self.allocator, "; const __end_i64: i64 = ");
 
                     if (slice_range.upper) |upper| {
                         try self.output.appendSlice(self.allocator, "@intCast(");
-                        try genSliceIndex(self, upper.*, true);
+                        try genSliceIndex(self, upper.*, true, true);
                         try self.output.appendSlice(self.allocator, ")");
                     } else {
                         // Default end: len for positive step, -1 for negative step
-                        try self.output.appendSlice(self.allocator, "if (__step > 0) @as(i64, @intCast(__s.len)) else -1");
+                        try self.output.appendSlice(self.allocator, "if (__step > 0) @as(i64, @intCast(__s.items.len)) else -1");
                     }
 
                     try self.output.appendSlice(self.allocator, "; var __result = std.ArrayList(");
@@ -165,26 +169,36 @@ pub fn genSubscript(self: *NativeCodegen, subscript: ast.Node.Subscript) Codegen
                     // Generate element type
                     try elem_type.toZigType(self.allocator, &self.output);
 
-                    try self.output.appendSlice(self.allocator, "){}; if (__step > 0) { var __i = __start; while (@as(i64, @intCast(__i)) < __end_i64) : (__i += @intCast(__step)) { try __result.append(std.heap.page_allocator, __s[__i]); } } else if (__step < 0) { var __i: i64 = @intCast(__start); while (__i > __end_i64) : (__i += __step) { try __result.append(std.heap.page_allocator, __s[@intCast(__i)]); } } break :blk try __result.toOwnedSlice(std.heap.page_allocator); }");
+                    try self.output.appendSlice(self.allocator, "){}; if (__step > 0) { var __i = __start; while (@as(i64, @intCast(__i)) < __end_i64) : (__i += @intCast(__step)) { try __result.append(std.heap.page_allocator, __s.items[__i]); } } else if (__step < 0) { var __i: i64 = @intCast(__start); while (__i > __end_i64) : (__i += __step) { try __result.append(std.heap.page_allocator, __s.items[@intCast(__i)]); } } break :blk try __result.toOwnedSlice(std.heap.page_allocator); }");
                 } else {
                     // Unknown type - generate error
                     try self.output.appendSlice(self.allocator, "@compileError(\"Slicing with step requires string or list type\")");
                 }
             } else if (needs_len) {
                 // Need length for upper bound - use block expression with bounds checking
+                const value_type = try self.type_inferrer.inferExpr(subscript.value.*);
+                const is_list = (value_type == .list);
+
                 try self.output.appendSlice(self.allocator, "blk: { const __s = ");
                 try genExpr(self, subscript.value.*);
                 try self.output.appendSlice(self.allocator, "; const __start = @min(");
 
                 if (slice_range.lower) |lower| {
-                    try genSliceIndex(self, lower.*, true);
+                    try genSliceIndex(self, lower.*, true, is_list);
                 } else {
                     try self.output.appendSlice(self.allocator, "0");
                 }
 
-                try self.output.appendSlice(self.allocator, ", __s.len); break :blk if (__start <= __s.len) __s[__start..__s.len] else \"\"; }");
+                if (is_list) {
+                    try self.output.appendSlice(self.allocator, ", __s.items.len); break :blk if (__start <= __s.items.len) __s.items[__start..__s.items.len] else &[_]i64{}; }");
+                } else {
+                    try self.output.appendSlice(self.allocator, ", __s.len); break :blk if (__start <= __s.len) __s[__start..__s.len] else \"\"; }");
+                }
             } else {
                 // Simple slice with both bounds known - need to check for negative indices
+                const value_type = try self.type_inferrer.inferExpr(subscript.value.*);
+                const is_list = (value_type == .list);
+
                 const has_negative = blk: {
                     if (slice_range.lower) |lower| {
                         if (isNegativeConstant(lower.*)) break :blk true;
@@ -199,39 +213,63 @@ pub fn genSubscript(self: *NativeCodegen, subscript: ast.Node.Subscript) Codegen
                     // Need block expression to handle negative indices with bounds checking
                     try self.output.appendSlice(self.allocator, "blk: { const __s = ");
                     try genExpr(self, subscript.value.*);
-                    try self.output.appendSlice(self.allocator, "; const __start = @min(");
 
-                    if (slice_range.lower) |lower| {
-                        try genSliceIndex(self, lower.*, true);
+                    if (is_list) {
+                        try self.output.appendSlice(self.allocator, "; const __start = @min(");
+                        if (slice_range.lower) |lower| {
+                            try genSliceIndex(self, lower.*, true, true);
+                        } else {
+                            try self.output.appendSlice(self.allocator, "0");
+                        }
+                        try self.output.appendSlice(self.allocator, ", __s.items.len); const __end = @min(");
+                        if (slice_range.upper) |upper| {
+                            try genSliceIndex(self, upper.*, true, true);
+                        } else {
+                            try self.output.appendSlice(self.allocator, "__s.items.len");
+                        }
+                        try self.output.appendSlice(self.allocator, ", __s.items.len); break :blk if (__start < __end) __s.items[__start..__end] else &[_]i64{}; }");
                     } else {
-                        try self.output.appendSlice(self.allocator, "0");
+                        try self.output.appendSlice(self.allocator, "; const __start = @min(");
+                        if (slice_range.lower) |lower| {
+                            try genSliceIndex(self, lower.*, true, false);
+                        } else {
+                            try self.output.appendSlice(self.allocator, "0");
+                        }
+                        try self.output.appendSlice(self.allocator, ", __s.len); const __end = @min(");
+                        if (slice_range.upper) |upper| {
+                            try genSliceIndex(self, upper.*, true, false);
+                        } else {
+                            try self.output.appendSlice(self.allocator, "__s.len");
+                        }
+                        try self.output.appendSlice(self.allocator, ", __s.len); break :blk if (__start < __end) __s[__start..__end] else \"\"; }");
                     }
-
-                    try self.output.appendSlice(self.allocator, ", __s.len); const __end = @min(");
-
-                    if (slice_range.upper) |upper| {
-                        try genSliceIndex(self, upper.*, true);
-                    } else {
-                        try self.output.appendSlice(self.allocator, "__s.len");
-                    }
-
-                    try self.output.appendSlice(self.allocator, ", __s.len); break :blk if (__start < __end) __s[__start..__end] else \"\"; }");
                 } else {
                     // No negative indices - but still need bounds checking for Python semantics
                     // Python allows out-of-bounds slices, Zig doesn't
                     try self.output.appendSlice(self.allocator, "blk: { const __s = ");
                     try genExpr(self, subscript.value.*);
-                    try self.output.appendSlice(self.allocator, "; const __start = @min(");
 
-                    if (slice_range.lower) |lower| {
-                        try genExpr(self, lower.*);
+                    if (is_list) {
+                        try self.output.appendSlice(self.allocator, "; const __start = @min(");
+                        if (slice_range.lower) |lower| {
+                            try genExpr(self, lower.*);
+                        } else {
+                            try self.output.appendSlice(self.allocator, "0");
+                        }
+                        try self.output.appendSlice(self.allocator, ", __s.items.len); const __end = @min(");
+                        try genExpr(self, slice_range.upper.?.*);
+                        try self.output.appendSlice(self.allocator, ", __s.items.len); break :blk if (__start < __end) __s.items[__start..__end] else &[_]i64{}; }");
                     } else {
-                        try self.output.appendSlice(self.allocator, "0");
+                        try self.output.appendSlice(self.allocator, "; const __start = @min(");
+                        if (slice_range.lower) |lower| {
+                            try genExpr(self, lower.*);
+                        } else {
+                            try self.output.appendSlice(self.allocator, "0");
+                        }
+                        try self.output.appendSlice(self.allocator, ", __s.len); const __end = @min(");
+                        try genExpr(self, slice_range.upper.?.*);
+                        try self.output.appendSlice(self.allocator, ", __s.len); break :blk if (__start < __end) __s[__start..__end] else \"\"; }");
                     }
-
-                    try self.output.appendSlice(self.allocator, ", __s.len); const __end = @min(");
-                    try genExpr(self, slice_range.upper.?.*);
-                    try self.output.appendSlice(self.allocator, ", __s.len); break :blk if (__start < __end) __s[__start..__end] else \"\"; }");
                 }
             }
         },
