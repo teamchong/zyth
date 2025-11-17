@@ -47,21 +47,33 @@ pub fn genSliceIndex(self: *NativeCodegen, node: ast.Node, in_slice_context: boo
 pub fn genSubscript(self: *NativeCodegen, subscript: ast.Node.Subscript) CodegenError!void {
     switch (subscript.slice) {
         .index => {
-            // Simple indexing: a[b]
-            // Check for negative index
-            if (isNegativeConstant(subscript.slice.index.*)) {
-                // Need block to access .len
-                try self.output.appendSlice(self.allocator, "blk: { const __s = ");
+            // Check if this is a dict subscript
+            const value_type = try self.type_inferrer.inferExpr(subscript.value.*);
+            const is_dict = (value_type == .dict);
+
+            if (is_dict) {
+                // Dict access: use .get(key).?
                 try genExpr(self, subscript.value.*);
-                try self.output.appendSlice(self.allocator, "; break :blk __s[");
-                try genSliceIndex(self, subscript.slice.index.*, true);
-                try self.output.appendSlice(self.allocator, "]; }");
-            } else {
-                // Positive index - simple subscript
-                try genExpr(self, subscript.value.*);
-                try self.output.appendSlice(self.allocator, "[");
+                try self.output.appendSlice(self.allocator, ".get(");
                 try genExpr(self, subscript.slice.index.*);
-                try self.output.appendSlice(self.allocator, "]");
+                try self.output.appendSlice(self.allocator, ").?");
+            } else {
+                // Array/list/string indexing: a[b]
+                // Check for negative index
+                if (isNegativeConstant(subscript.slice.index.*)) {
+                    // Need block to access .len
+                    try self.output.appendSlice(self.allocator, "blk: { const __s = ");
+                    try genExpr(self, subscript.value.*);
+                    try self.output.appendSlice(self.allocator, "; break :blk __s[");
+                    try genSliceIndex(self, subscript.slice.index.*, true);
+                    try self.output.appendSlice(self.allocator, "]; }");
+                } else {
+                    // Positive index - simple subscript
+                    try genExpr(self, subscript.value.*);
+                    try self.output.appendSlice(self.allocator, "[");
+                    try genExpr(self, subscript.slice.index.*);
+                    try self.output.appendSlice(self.allocator, "]");
+                }
             }
         },
         .slice => |slice_range| {

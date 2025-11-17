@@ -88,6 +88,14 @@ pub fn genClassDef(self: *NativeCodegen, class: ast.Node.ClassDef) CodegenError!
         }
     }
 
+    // Check for base classes - we support single inheritance
+    var parent_class: ?ast.Node.ClassDef = null;
+    if (class.bases.len > 0) {
+        // Look up parent class in registry (populated in Phase 2 of generate())
+        // Order doesn't matter - all classes are registered before code generation
+        parent_class = self.classes.get(class.bases[0]);
+    }
+
     // Generate: const ClassName = struct {
     try self.emitIndent();
     try self.output.writer(self.allocator).print("const {s} = struct {{\n", .{class.name});
@@ -194,6 +202,15 @@ pub fn genClassDef(self: *NativeCodegen, class: ast.Node.ClassDef) CodegenError!
         try self.output.appendSlice(self.allocator, "}\n");
     }
 
+    // Build list of child method names for override detection
+    var child_method_names = std.ArrayList([]const u8){};
+    defer child_method_names.deinit(self.allocator);
+    for (class.body) |stmt| {
+        if (stmt == .function_def) {
+            try child_method_names.append(self.allocator, stmt.function_def.name);
+        }
+    }
+
     // Generate regular methods (non-__init__)
     for (class.body) |stmt| {
         if (stmt == .function_def) {
@@ -240,6 +257,69 @@ pub fn genClassDef(self: *NativeCodegen, class: ast.Node.ClassDef) CodegenError!
             self.dedent();
             try self.emitIndent();
             try self.output.appendSlice(self.allocator, "}\n");
+        }
+    }
+
+    // Inherit parent methods that aren't overridden
+    if (parent_class) |parent| {
+        for (parent.body) |parent_stmt| {
+            if (parent_stmt == .function_def) {
+                const parent_method = parent_stmt.function_def;
+                if (std.mem.eql(u8, parent_method.name, "__init__")) continue;
+
+                // Check if child overrides this method
+                var is_overridden = false;
+                for (child_method_names.items) |child_name| {
+                    if (std.mem.eql(u8, child_name, parent_method.name)) {
+                        is_overridden = true;
+                        break;
+                    }
+                }
+
+                if (!is_overridden) {
+                    // Copy parent method to child class
+                    try self.output.appendSlice(self.allocator, "\n");
+                    try self.emitIndent();
+                    try self.output.writer(self.allocator).print("pub fn {s}(self: *", .{parent_method.name});
+                    try self.output.appendSlice(self.allocator, class.name);
+
+                    // Add other parameters (skip 'self')
+                    for (parent_method.args) |arg| {
+                        if (std.mem.eql(u8, arg.name, "self")) continue;
+                        try self.output.appendSlice(self.allocator, ", ");
+                        try self.output.writer(self.allocator).print("{s}: ", .{arg.name});
+                        const param_type = pythonTypeToZig(arg.type_annotation);
+                        try self.output.appendSlice(self.allocator, param_type);
+                    }
+
+                    try self.output.appendSlice(self.allocator, ") ");
+
+                    // Determine return type
+                    if (hasReturnStatement(parent_method.body)) {
+                        try self.output.appendSlice(self.allocator, "i64");
+                    } else {
+                        try self.output.appendSlice(self.allocator, "void");
+                    }
+
+                    try self.output.appendSlice(self.allocator, " {\n");
+                    self.indent();
+
+                    // Push new scope for method body
+                    try self.pushScope();
+
+                    // Generate method body
+                    for (parent_method.body) |method_stmt| {
+                        try self.generateStmt(method_stmt);
+                    }
+
+                    // Pop scope when exiting method
+                    self.popScope();
+
+                    self.dedent();
+                    try self.emitIndent();
+                    try self.output.appendSlice(self.allocator, "}\n");
+                }
+            }
         }
     }
 

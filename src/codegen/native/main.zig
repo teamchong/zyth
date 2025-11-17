@@ -34,6 +34,9 @@ pub const NativeCodegen = struct {
     // Variable scope tracking - stack of scopes (innermost = last)
     scopes: std.ArrayList(std.StringHashMap(void)),
 
+    // Class registry for inheritance support - maps class name to ClassDef
+    classes: std.StringHashMap(ast.Node.ClassDef),
+
     pub fn init(allocator: std.mem.Allocator, type_inferrer: *TypeInferrer, semantic_info: *SemanticInfo) !*NativeCodegen {
         const self = try allocator.create(NativeCodegen);
         var scopes = std.ArrayList(std.StringHashMap(void)){};
@@ -49,6 +52,7 @@ pub const NativeCodegen = struct {
             .semantic_info = semantic_info,
             .indent_level = 0,
             .scopes = scopes,
+            .classes = std.StringHashMap(ast.Node.ClassDef).init(allocator),
         };
         return self;
     }
@@ -60,6 +64,7 @@ pub const NativeCodegen = struct {
             scope.deinit();
         }
         self.scopes.deinit(self.allocator);
+        self.classes.deinit();
         self.allocator.destroy(self);
     }
 
@@ -101,7 +106,14 @@ pub const NativeCodegen = struct {
         // PHASE 1: Analyze module to determine requirements
         const analysis = try analyzer.analyzeModule(module, self.allocator);
 
-        // PHASE 2: Generate imports based on analysis
+        // PHASE 2: Register all classes for inheritance support
+        for (module.body) |stmt| {
+            if (stmt == .class_def) {
+                try self.classes.put(stmt.class_def.name, stmt.class_def);
+            }
+        }
+
+        // PHASE 3: Generate imports based on analysis
         try self.emit("const std = @import(\"std\");\n");
         if (analysis.needs_runtime) {
             // Use relative import since runtime.zig is in /tmp with generated file
@@ -112,10 +124,10 @@ pub const NativeCodegen = struct {
         }
         try self.emit("\n");
 
-        // PHASE 3: Define __name__ constant (for if __name__ == "__main__" support)
+        // PHASE 4: Define __name__ constant (for if __name__ == "__main__" support)
         try self.emit("const __name__ = \"__main__\";\n\n");
 
-        // PHASE 4: Generate class and function definitions (before main)
+        // PHASE 5: Generate class and function definitions (before main)
         for (module.body) |stmt| {
             if (stmt == .class_def) {
                 try statements.genClassDef(self, stmt.class_def);
@@ -162,6 +174,7 @@ pub const NativeCodegen = struct {
             .for_stmt => |for_stmt| try statements.genFor(self, for_stmt),
             .return_stmt => |ret| try statements.genReturn(self, ret),
             .assert_stmt => |assert_node| try statements.genAssert(self, assert_node),
+            .try_stmt => |try_node| try statements.genTry(self, try_node),
             .class_def => |class| try statements.genClassDef(self, class),
             .import_stmt => {}, // Native modules - no import needed
             .import_from => |import| try statements.genImportFrom(self, import),

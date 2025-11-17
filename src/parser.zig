@@ -132,6 +132,7 @@ pub const Parser = struct {
                 .Import => return try statements.parseImport(self),
                 .From => return try statements.parseImportFrom(self),
                 .Assert => return try statements.parseAssert(self),
+                .Try => return try statements.parseTry(self),
                 else => {
                     // Could be assignment or expression statement
                     return try statements.parseExprOrAssign(self);

@@ -220,6 +220,27 @@ pub fn analyzeLifetimes(info: *types.SemanticInfo, node: ast.Node, current_line:
             }
             line += 1;
         },
+        .try_stmt => |try_stmt| {
+            // Analyze try block
+            for (try_stmt.body) |body_node| {
+                line = try analyzeLifetimes(info, body_node, line);
+            }
+            // Analyze except handlers
+            for (try_stmt.handlers) |handler| {
+                for (handler.body) |body_node| {
+                    line = try analyzeLifetimes(info, body_node, line);
+                }
+            }
+            // Analyze else block
+            for (try_stmt.else_body) |else_node| {
+                line = try analyzeLifetimes(info, else_node, line);
+            }
+            // Analyze finally block
+            for (try_stmt.finalbody) |finally_node| {
+                line = try analyzeLifetimes(info, finally_node, line);
+            }
+            line += 1;
+        },
         // Leaf nodes
         .constant, .import_stmt, .import_from => {
             // No variables to track

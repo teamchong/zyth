@@ -12,13 +12,17 @@ pub fn genLen(self: *NativeCodegen, args: []ast.Node) CodegenError!void {
         return;
     }
 
-    // Check if argument is ArrayList (detected as .list type) or tuple
+    // Check if argument is ArrayList (detected as .list type), dict, or tuple
     const arg_type = self.type_inferrer.inferExpr(args[0]) catch .unknown;
     const is_arraylist = (arg_type == .list);
+    const is_dict = (arg_type == .dict);
     const is_tuple = (arg_type == .tuple);
 
-    // Generate: obj.items.len for ArrayList, obj.len for slices/arrays
-    // For tuples, use @typeInfo to get field count at compile time
+    // Generate:
+    // - obj.items.len for ArrayList
+    // - obj.count() for HashMap/dict
+    // - @typeInfo(...).fields.len for tuples
+    // - obj.len for slices/arrays/strings
     if (is_tuple) {
         try self.output.appendSlice(self.allocator, "@typeInfo(@TypeOf(");
         try self.genExpr(args[0]);
@@ -27,6 +31,8 @@ pub fn genLen(self: *NativeCodegen, args: []ast.Node) CodegenError!void {
         try self.genExpr(args[0]);
         if (is_arraylist) {
             try self.output.appendSlice(self.allocator, ".items.len");
+        } else if (is_dict) {
+            try self.output.appendSlice(self.allocator, ".count()");
         } else {
             try self.output.appendSlice(self.allocator, ".len");
         }

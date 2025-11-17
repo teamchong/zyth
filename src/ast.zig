@@ -29,6 +29,7 @@ pub const Node = union(enum) {
     import_stmt: Import,
     import_from: ImportFrom,
     assert_stmt: Assert,
+    try_stmt: Try,
 
     pub const Module = struct {
         body: []Node,
@@ -184,6 +185,21 @@ pub const Node = union(enum) {
     pub const Assert = struct {
         condition: *Node,
         msg: ?*Node,
+    };
+
+    /// Try/except/finally statement
+    pub const Try = struct {
+        body: []Node, // try block
+        handlers: []ExceptHandler, // except clauses
+        else_body: []Node, // else block (optional, rarely used)
+        finalbody: []Node, // finally block (optional)
+    };
+
+    /// Exception handler clause
+    pub const ExceptHandler = struct {
+        type: ?[]const u8, // Exception type name (or null for bare except)
+        name: ?[]const u8, // Variable name (as e) - not implementing yet
+        body: []Node, // Handler body
     };
 
     /// Recursively free all allocations in the AST
@@ -348,6 +364,19 @@ pub const Node = union(enum) {
                     msg.deinit(allocator);
                     allocator.destroy(msg);
                 }
+            },
+            .try_stmt => |t| {
+                for (t.body) |*n| n.deinit(allocator);
+                allocator.free(t.body);
+                for (t.handlers) |handler| {
+                    for (handler.body) |*n| n.deinit(allocator);
+                    allocator.free(handler.body);
+                }
+                allocator.free(t.handlers);
+                for (t.else_body) |*n| n.deinit(allocator);
+                allocator.free(t.else_body);
+                for (t.finalbody) |*n| n.deinit(allocator);
+                allocator.free(t.finalbody);
             },
             // Leaf nodes need no cleanup
             .name, .constant => {},

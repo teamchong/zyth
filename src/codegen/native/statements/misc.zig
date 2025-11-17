@@ -359,3 +359,40 @@ pub fn genAssert(self: *NativeCodegen, assert_node: ast.Node.Assert) CodegenErro
     try self.emitIndent();
     try self.output.appendSlice(self.allocator, "}\n");
 }
+
+/// Generate try/except/finally statement
+/// Strategy: Use Zig's error handling for basic try/catch
+/// For now: Simple implementation that just wraps code blocks
+pub fn genTry(self: *NativeCodegen, try_node: ast.Node.Try) CodegenError!void {
+    // Generate finally block as defer (executes on scope exit)
+    if (try_node.finalbody.len > 0) {
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "defer {\n");
+        self.indent();
+        for (try_node.finalbody) |stmt| {
+            try self.generateStmt(stmt);
+        }
+        self.dedent();
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "}\n");
+    }
+
+    // For basic exception handling, wrap in a block
+    // Python exceptions become simple control flow
+    try self.emitIndent();
+    try self.output.appendSlice(self.allocator, "{\n");
+    self.indent();
+
+    // Generate try block
+    for (try_node.body) |stmt| {
+        try self.generateStmt(stmt);
+    }
+
+    self.dedent();
+    try self.emitIndent();
+    try self.output.appendSlice(self.allocator, "}\n");
+
+    // Note: Exception handlers not yet implemented
+    // Would need runtime support for exception types
+    _ = try_node.handlers;
+}

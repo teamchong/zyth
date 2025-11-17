@@ -18,6 +18,7 @@ pub const genReturn = misc.genReturn;
 pub const genImportFrom = misc.genImportFrom;
 pub const genPrint = misc.genPrint;
 pub const genAssert = misc.genAssert;
+pub const genTry = misc.genTry;
 pub const genAssign = assign.genAssign;
 pub const genExprStmt = assign.genExprStmt;
 pub const genIf = control.genIf;

@@ -27,6 +27,9 @@ pub const TokenType = enum {
     Async,
     Await,
     Assert,
+    Try,
+    Except,
+    Finally,
 
     // Literals
     Ident,
@@ -251,6 +254,9 @@ pub const Lexer = struct {
             .{ "async", .Async },
             .{ "await", .Await },
             .{ "assert", .Assert },
+            .{ "try", .Try },
+            .{ "except", .Except },
+            .{ "finally", .Finally },
         });
 
         return keywords.get(lexeme) orelse .Ident;
