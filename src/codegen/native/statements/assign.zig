@@ -295,29 +295,23 @@ pub fn genAssign(self: *NativeCodegen, assign: ast.Node.Assign) CodegenError!voi
                 // Comptime dicts use string literals (no allocation) → simple cleanup
                 // Runtime dicts with mixed types convert to strings → need value freeing
                 const needs_value_cleanup = blk: {
-                    std.debug.print("DEBUG: is_comptime_dict={}\n", .{is_comptime_dict});
                     if (is_comptime_dict) break :blk false;  // Comptime dicts never need value cleanup
                     if (assign.value.dict.values.len == 0) break :blk false;
 
                     // Check if values have different types (will be widened to string)
                     const first_type = try self.type_inferrer.inferExpr(assign.value.dict.values[0]);
-                    std.debug.print("DEBUG: first_type={}\n", .{first_type});
                     for (assign.value.dict.values[1..]) |value| {
                         const this_type = try self.type_inferrer.inferExpr(value);
-                        std.debug.print("DEBUG: this_type={}\n", .{this_type});
                         // Direct enum tag comparison
                         const first_tag = @as(std.meta.Tag(@TypeOf(first_type)), first_type);
                         const this_tag = @as(std.meta.Tag(@TypeOf(this_type)), this_type);
-                        std.debug.print("DEBUG: first_tag={}, this_tag={}, equal={}\n", .{first_tag, this_tag, first_tag == this_tag});
                         if (first_tag != this_tag) {
                             // Different types → runtime path will allocate strings
-                            std.debug.print("DEBUG: needs_value_cleanup=TRUE\n", .{});
                             break :blk true;
                         }
                     }
 
                     // All same type → no value cleanup needed
-                    std.debug.print("DEBUG: needs_value_cleanup=FALSE (same types)\n", .{});
                     break :blk false;
                 };
 
