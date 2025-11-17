@@ -9,6 +9,11 @@ const pytuple = @import("pytuple.zig");
 /// Export string utilities for native codegen
 pub const string_utils = @import("string_utils.zig");
 
+/// Export comptime type inference helpers
+const comptime_helpers = @import("comptime_helpers.zig");
+pub const InferListType = comptime_helpers.InferListType;
+pub const createListComptime = comptime_helpers.createListComptime;
+
 /// Python exception types mapped to Zig errors
 pub const PythonError = error{
     ZeroDivisionError,
