@@ -10,7 +10,7 @@ Python to Zig AOT compiler. Write Python, run native code.
 
 ```bash
 # Clone and install
-git clone <repo-url> pyaot
+git clone https://github.com/teamchong/zyth pyaot
 cd pyaot
 make install
 

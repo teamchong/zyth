@@ -102,7 +102,7 @@ fn analyzeExpr(node: ast.Node) !ModuleAnalysis {
                 }
 
                 // Check for string methods that need allocator
-                if (std.mem.eql(u8, attr.attr, "replace")) {
+                if (std.mem.eql(u8, attr.attr, "replace") or std.mem.eql(u8, attr.attr, "split")) {
                     analysis.needs_allocator = true;
                 }
 

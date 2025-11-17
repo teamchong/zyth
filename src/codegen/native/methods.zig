@@ -5,19 +5,26 @@ const CodegenError = @import("main.zig").CodegenError;
 const NativeCodegen = @import("main.zig").NativeCodegen;
 
 /// Generate code for text.split(separator)
-/// Example: "a b c".split(" ") -> std.mem.split(u8, text, sep)
+/// Example: "a b c".split(" ") -> [][]const u8 slice
 pub fn genSplit(self: *NativeCodegen, obj: ast.Node, args: []ast.Node) CodegenError!void {
     if (args.len != 1) {
         // TODO: Error handling
         return;
     }
 
-    // Generate: std.mem.split(u8, text, sep)
-    try self.output.appendSlice(self.allocator, "std.mem.split(u8, ");
-    try self.genExpr(obj); // The string object
+    // Generate block expression that returns [][]const u8
+    try self.output.appendSlice(self.allocator, "blk: {\n");
+    try self.output.appendSlice(self.allocator, "    var _split_result = std.ArrayList([]const u8){};\n");
+    try self.output.appendSlice(self.allocator, "    var _split_iter = std.mem.splitSequence(u8, ");
+    try self.genExpr(obj); // The string to split
     try self.output.appendSlice(self.allocator, ", ");
     try self.genExpr(args[0]); // The separator
-    try self.output.appendSlice(self.allocator, ")");
+    try self.output.appendSlice(self.allocator, ");\n");
+    try self.output.appendSlice(self.allocator, "    while (_split_iter.next()) |part| {\n");
+    try self.output.appendSlice(self.allocator, "        try _split_result.append(allocator, part);\n");
+    try self.output.appendSlice(self.allocator, "    }\n");
+    try self.output.appendSlice(self.allocator, "    break :blk try _split_result.toOwnedSlice(allocator);\n");
+    try self.output.appendSlice(self.allocator, "}");
 }
 
 /// Generate code for list.append(item)
@@ -40,10 +47,17 @@ pub fn genAppend(self: *NativeCodegen, obj: ast.Node, args: []ast.Node) CodegenE
 pub fn genUpper(self: *NativeCodegen, obj: ast.Node, args: []ast.Node) CodegenError!void {
     _ = args;
 
-    // Generate: try string_utils.toUpper(allocator, text)
-    try self.output.appendSlice(self.allocator, "try string_utils.toUpper(allocator, ");
+    // Generate block expression
+    try self.output.appendSlice(self.allocator, "blk: {\n");
+    try self.output.appendSlice(self.allocator, "    const _text = ");
     try self.genExpr(obj);
-    try self.output.appendSlice(self.allocator, ")");
+    try self.output.appendSlice(self.allocator, ";\n");
+    try self.output.appendSlice(self.allocator, "    const _result = try allocator.alloc(u8, _text.len);\n");
+    try self.output.appendSlice(self.allocator, "    for (_text, 0..) |c, i| {\n");
+    try self.output.appendSlice(self.allocator, "        _result[i] = std.ascii.toUpper(c);\n");
+    try self.output.appendSlice(self.allocator, "    }\n");
+    try self.output.appendSlice(self.allocator, "    break :blk _result;\n");
+    try self.output.appendSlice(self.allocator, "}");
 }
 
 /// Generate code for text.lower()
@@ -51,10 +65,17 @@ pub fn genUpper(self: *NativeCodegen, obj: ast.Node, args: []ast.Node) CodegenEr
 pub fn genLower(self: *NativeCodegen, obj: ast.Node, args: []ast.Node) CodegenError!void {
     _ = args;
 
-    // Generate: try string_utils.toLower(allocator, text)
-    try self.output.appendSlice(self.allocator, "try string_utils.toLower(allocator, ");
+    // Generate block expression
+    try self.output.appendSlice(self.allocator, "blk: {\n");
+    try self.output.appendSlice(self.allocator, "    const _text = ");
     try self.genExpr(obj);
-    try self.output.appendSlice(self.allocator, ")");
+    try self.output.appendSlice(self.allocator, ";\n");
+    try self.output.appendSlice(self.allocator, "    const _result = try allocator.alloc(u8, _text.len);\n");
+    try self.output.appendSlice(self.allocator, "    for (_text, 0..) |c, i| {\n");
+    try self.output.appendSlice(self.allocator, "        _result[i] = std.ascii.toLower(c);\n");
+    try self.output.appendSlice(self.allocator, "    }\n");
+    try self.output.appendSlice(self.allocator, "    break :blk _result;\n");
+    try self.output.appendSlice(self.allocator, "}");
 }
 
 /// Generate code for text.strip()
@@ -129,12 +150,12 @@ pub fn genEndswith(self: *NativeCodegen, obj: ast.Node, args: []ast.Node) Codege
 pub fn genFind(self: *NativeCodegen, obj: ast.Node, args: []ast.Node) CodegenError!void {
     if (args.len != 1) return;
 
-    // Generate: std.mem.indexOf(u8, text, substring) orelse -1
-    try self.output.appendSlice(self.allocator, "(std.mem.indexOf(u8, ");
+    // Generate: if (std.mem.indexOf(u8, text, substring)) |idx| @as(i64, @intCast(idx)) else -1
+    try self.output.appendSlice(self.allocator, "if (std.mem.indexOf(u8, ");
     try self.genExpr(obj);
     try self.output.appendSlice(self.allocator, ", ");
     try self.genExpr(args[0]);
-    try self.output.appendSlice(self.allocator, ") orelse @as(usize, @bitCast(@as(isize, -1))))");
+    try self.output.appendSlice(self.allocator, ")) |idx| @as(i64, @intCast(idx)) else -1");
 }
 
 /// Generate code for text.count(substring)
