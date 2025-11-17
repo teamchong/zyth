@@ -13,6 +13,7 @@ pub const string_utils = @import("string_utils.zig");
 const comptime_helpers = @import("comptime_helpers.zig");
 pub const InferListType = comptime_helpers.InferListType;
 pub const createListComptime = comptime_helpers.createListComptime;
+pub const InferDictValueType = comptime_helpers.InferDictValueType;
 
 /// Python exception types mapped to Zig errors
 pub const PythonError = error{

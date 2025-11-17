@@ -97,6 +97,56 @@ pub fn canWiden(comptime From: type, comptime To: type) bool {
     return false;
 }
 
+/// Infer dict value type from comptime-known key-value pairs
+/// Assumes keys are strings, infers value type with widening
+pub fn InferDictValueType(comptime TupleType: type) type {
+    const type_info = @typeInfo(TupleType);
+
+    if (type_info != .@"struct") {
+        @compileError("InferDictValueType expects a tuple type");
+    }
+
+    const fields = type_info.@"struct".fields;
+    if (fields.len == 0) {
+        return i64; // Default empty dict value type
+    }
+
+    // Each field should be a 2-tuple (key, value)
+    // We only care about value types (index 1)
+    comptime var result_type: type = i64;
+    comptime var has_float = false;
+    comptime var has_string = false;
+
+    inline for (fields) |field| {
+        const KV = field.type;
+        const kv_info = @typeInfo(KV);
+
+        if (kv_info != .@"struct") continue;
+        const kv_fields = kv_info.@"struct".fields;
+        if (kv_fields.len != 2) continue;
+
+        const V = kv_fields[1].type; // Value type
+
+        // Check value type
+        if (V == f64 or V == f32 or V == f16 or V == comptime_float) {
+            has_float = true;
+        } else if (V == []const u8 or V == []u8) {
+            has_string = true;
+        }
+    }
+
+    // Type promotion hierarchy
+    if (has_string) {
+        result_type = []const u8;
+    } else if (has_float) {
+        result_type = f64;
+    } else {
+        result_type = i64;
+    }
+
+    return result_type;
+}
+
 test "InferListType - homogeneous int" {
     const T = InferListType(@TypeOf(.{ 1, 2, 3 }));
     try std.testing.expectEqual(i64, T);

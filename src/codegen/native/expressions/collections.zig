@@ -158,6 +158,106 @@ pub fn genList(self: *NativeCodegen, list: ast.Node.List) CodegenError!void {
 
 /// Generate dict literal as StringHashMap
 pub fn genDict(self: *NativeCodegen, dict: ast.Node.Dict) CodegenError!void {
+    // Empty dict
+    if (dict.keys.len == 0) {
+        try self.output.appendSlice(self.allocator, "std.StringHashMap(i64).init(allocator)");
+        return;
+    }
+
+    // Check if all keys and values are compile-time constants
+    var all_comptime = true;
+    for (dict.keys) |key| {
+        if (!isComptimeConstant(key)) {
+            all_comptime = false;
+            break;
+        }
+    }
+    if (all_comptime) {
+        for (dict.values) |value| {
+            if (!isComptimeConstant(value)) {
+                all_comptime = false;
+                break;
+            }
+        }
+    }
+
+    // COMPTIME PATH: All entries known at compile time
+    if (all_comptime) {
+        const label = try std.fmt.allocPrint(self.allocator, "dict_{d}", .{@intFromPtr(dict.keys.ptr)});
+        defer self.allocator.free(label);
+
+        try self.output.appendSlice(self.allocator, label);
+        try self.output.appendSlice(self.allocator, ": {\n");
+        self.indent();
+        try self.emitIndent();
+
+        // Generate comptime tuple of key-value pairs
+        try self.output.appendSlice(self.allocator, "const _kvs = .{\n");
+        self.indent();
+        for (dict.keys, dict.values) |key, value| {
+            try self.emitIndent();
+            try self.output.appendSlice(self.allocator, ".{ ");
+            try genExpr(self, key);
+            try self.output.appendSlice(self.allocator, ", ");
+            try genExpr(self, value);
+            try self.output.appendSlice(self.allocator, " },\n");
+        }
+        self.dedent();
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "};\n");
+
+        // Infer value type at comptime
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "const V = comptime runtime.InferDictValueType(@TypeOf(_kvs));\n");
+
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "var _dict = std.StringHashMap(V).init(allocator);\n");
+
+        // Inline loop - unrolled at compile time
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "inline for (_kvs) |kv| {\n");
+        self.indent();
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "const cast_val = if (@TypeOf(kv[1]) != V) cast_blk: {\n");
+        self.indent();
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "if (V == f64 and (@TypeOf(kv[1]) == i64 or @TypeOf(kv[1]) == comptime_int)) {\n");
+        self.indent();
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "break :cast_blk @as(f64, @floatFromInt(kv[1]));\n");
+        self.dedent();
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "}\n");
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "if (V == f64 and @TypeOf(kv[1]) == comptime_float) {\n");
+        self.indent();
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "break :cast_blk @as(f64, kv[1]);\n");
+        self.dedent();
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "}\n");
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "break :cast_blk kv[1];\n");
+        self.dedent();
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "} else kv[1];\n");
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "try _dict.put(kv[0], cast_val);\n");
+        self.dedent();
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "}\n");
+
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "break :");
+        try self.output.appendSlice(self.allocator, label);
+        try self.output.appendSlice(self.allocator, " _dict;\n");
+        self.dedent();
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "}");
+        return;
+    }
+
+    // RUNTIME PATH: Dynamic dict (fallback to current approach)
     // Infer value type - check if all values have same type
     var val_type: @import("../../../analysis/native_types.zig").NativeType = .unknown;
     if (dict.values.len > 0) {
