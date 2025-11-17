@@ -11,6 +11,7 @@ const constants = @import("expressions/constants.zig");
 const operators = @import("expressions/operators.zig");
 const subscript_mod = @import("expressions/subscript.zig");
 const collections = @import("expressions/collections.zig");
+const lambda_mod = @import("expressions/lambda.zig");
 
 // Re-export functions from submodules for backward compatibility
 pub const genConstant = constants.genConstant;
@@ -38,6 +39,7 @@ pub fn genExpr(self: *NativeCodegen, node: ast.Node) CodegenError!void {
         .tuple => |t| try genTuple(self, t),
         .subscript => |s| try genSubscriptLocal(self, s),
         .attribute => |a| try genAttribute(self, a),
+        .lambda => |lam| lambda_mod.genLambda(self, lam) catch {},
         else => {},
     }
 }
@@ -47,6 +49,60 @@ fn genCall(self: *NativeCodegen, call: ast.Node.Call) CodegenError!void {
     // Try to dispatch to specialized handler
     const dispatched = try dispatch.dispatchCall(self, call);
     if (dispatched) return;
+
+    // Handle immediate lambda calls: (lambda x: x * 2)(5)
+    if (call.func.* == .lambda) {
+        // For immediate calls, we need the function name WITHOUT the & prefix
+        // Generate lambda function and get its name
+        const lambda = call.func.lambda;
+
+        // Generate unique lambda function name
+        const lambda_name = try std.fmt.allocPrint(
+            self.allocator,
+            "__lambda_{d}",
+            .{self.lambda_counter},
+        );
+        defer self.allocator.free(lambda_name);
+        self.lambda_counter += 1;
+
+        // Generate the lambda function definition using lambda_mod
+        // We'll do this manually to avoid the & prefix
+        var lambda_func = std.ArrayList(u8){};
+
+        // Function signature
+        try lambda_func.writer(self.allocator).print("fn {s}(", .{lambda_name});
+
+        for (lambda.args, 0..) |arg, i| {
+            if (i > 0) try lambda_func.appendSlice(self.allocator, ", ");
+            try lambda_func.writer(self.allocator).print("{s}: i64", .{arg.name});
+        }
+
+        try lambda_func.writer(self.allocator).print(") i64 {{\n    return ", .{});
+
+        // Generate body expression
+        const saved_output = self.output;
+        self.output = std.ArrayList(u8){};
+        try genExpr(self, lambda.body.*);
+        const body_code = try self.output.toOwnedSlice(self.allocator);
+        self.output = saved_output;
+
+        try lambda_func.appendSlice(self.allocator, body_code);
+        self.allocator.free(body_code);
+        try lambda_func.appendSlice(self.allocator, ";\n}\n\n");
+
+        // Store lambda function
+        try self.lambda_functions.append(self.allocator, try lambda_func.toOwnedSlice(self.allocator));
+
+        // Generate direct function call (no & prefix for immediate calls)
+        try self.output.appendSlice(self.allocator, lambda_name);
+        try self.output.appendSlice(self.allocator, "(");
+        for (call.args, 0..) |arg, i| {
+            if (i > 0) try self.output.appendSlice(self.allocator, ", ");
+            try genExpr(self, arg);
+        }
+        try self.output.appendSlice(self.allocator, ")");
+        return;
+    }
 
     // Handle method calls (obj.method())
     if (call.func.* == .attribute) {
@@ -67,9 +123,24 @@ fn genCall(self: *NativeCodegen, call: ast.Node.Call) CodegenError!void {
         return;
     }
 
-    // Check for class instantiation (ClassName() -> ClassName.init())
+    // Check for class instantiation or closure calls
     if (call.func.* == .name) {
         const func_name = call.func.name.id;
+
+        // Check if this is a closure variable
+        if (self.closure_vars.contains(func_name)) {
+            // Closure call: add_five(3) -> add_five.call(3)
+            try self.output.appendSlice(self.allocator, func_name);
+            try self.output.appendSlice(self.allocator, ".call(");
+
+            for (call.args, 0..) |arg, i| {
+                if (i > 0) try self.output.appendSlice(self.allocator, ", ");
+                try genExpr(self, arg);
+            }
+
+            try self.output.appendSlice(self.allocator, ")");
+            return;
+        }
 
         // If name starts with uppercase, it's a class constructor
         if (func_name.len > 0 and std.ascii.isUpper(func_name[0])) {

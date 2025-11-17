@@ -136,6 +136,26 @@ pub fn analyzeLifetimes(info: *types.SemanticInfo, node: ast.Node, current_line:
             _ = scope_start;
             line += 1;
         },
+        .lambda => |lambda| {
+            const scope_start = line;
+
+            // DON'T record lambda parameters as variable assignments!
+            // Lambda parameters are local to the lambda scope and shouldn't
+            // be conflated with outer scope variables of the same name
+            // for (lambda.args) |arg| {
+            //     try info.recordVariableUse(arg.name, line, true);
+            // }
+
+            // Analyze body (single expression)
+            // Variables referenced in the body will be recorded as uses
+            line = try analyzeLifetimes(info, lambda.body.*, line);
+
+            // Mark scope end for parameters
+            for (lambda.args) |arg| {
+                try info.markScopeEnd(arg.name, line);
+            }
+            _ = scope_start;
+        },
         .class_def => |class_def| {
             const scope_start = line;
 

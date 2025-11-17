@@ -4,6 +4,7 @@ const lexer = @import("../lexer.zig");
 const ParseError = @import("../parser.zig").ParseError;
 const Parser = @import("../parser.zig").Parser;
 const literals = @import("literals.zig");
+const expressions = @import("expressions.zig");
 
 /// Parse postfix expressions: function calls, subscripts, attribute access
 pub fn parsePostfix(self: *Parser) ParseError!ast.Node {
@@ -265,6 +266,9 @@ pub fn parsePrimary(self: *Parser) ParseError!ast.Node {
                         .value = value_ptr,
                     },
                 };
+            },
+            .Lambda => {
+                return try expressions.parseLambda(self);
             },
             .LParen => {
                 _ = self.advance();

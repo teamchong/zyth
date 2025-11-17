@@ -30,6 +30,7 @@ pub const TokenType = enum {
     Try,
     Except,
     Finally,
+    Lambda,
 
     // Literals
     Ident,
@@ -257,6 +258,7 @@ pub const Lexer = struct {
             .{ "try", .Try },
             .{ "except", .Except },
             .{ "finally", .Finally },
+            .{ "lambda", .Lambda },
         });
 
         return keywords.get(lexeme) orelse .Ident;

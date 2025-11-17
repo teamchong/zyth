@@ -1,0 +1,339 @@
+/// Enhanced lambda with closure support using Zig comptime
+/// Handles: lambda returning lambda, variable capture, higher-order functions
+const std = @import("std");
+const ast = @import("../../../ast.zig");
+const NativeCodegen = @import("../main.zig").NativeCodegen;
+const CodegenError = @import("../main.zig").CodegenError;
+const native_types = @import("../../../analysis/native_types.zig");
+const NativeType = native_types.NativeType;
+
+const ClosureError = error{
+    NotAClosure,
+} || CodegenError;
+
+/// Check if lambda body is itself a lambda (closure case)
+fn isClosureLambda(body: ast.Node) bool {
+    return body == .lambda;
+}
+
+/// Analyze which outer variables are captured by inner lambda
+fn findCapturedVars(self: *NativeCodegen, outer_params: []ast.Arg, inner_lambda: ast.Node.Lambda) ![][]const u8 {
+    var captured = std.ArrayList([]const u8){};
+
+    // For each outer parameter, check if it's referenced in inner lambda body
+    for (outer_params) |param| {
+        if (try isVarReferenced(self, param.name, inner_lambda.body.*)) {
+            try captured.append(self.allocator, param.name);
+        }
+    }
+
+    return captured.toOwnedSlice(self.allocator);
+}
+
+/// Check if variable name is referenced in AST node
+fn isVarReferenced(self: *NativeCodegen, var_name: []const u8, node: ast.Node) CodegenError!bool {
+    switch (node) {
+        .name => |n| return std.mem.eql(u8, n.id, var_name),
+        .binop => |b| {
+            return (try isVarReferenced(self, var_name, b.left.*)) or
+                   (try isVarReferenced(self, var_name, b.right.*));
+        },
+        .call => |c| {
+            if (try isVarReferenced(self, var_name, c.func.*)) return true;
+            for (c.args) |arg| {
+                if (try isVarReferenced(self, var_name, arg)) return true;
+            }
+            return false;
+        },
+        .compare => |c| {
+            if (try isVarReferenced(self, var_name, c.left.*)) return true;
+            for (c.comparators) |comp| {
+                if (try isVarReferenced(self, var_name, comp)) return true;
+            }
+            return false;
+        },
+        else => return false,
+    }
+}
+
+/// Generate closure lambda (returns struct with captured state)
+/// Example: make_adder = lambda x: lambda y: x + y
+pub fn genClosureLambda(self: *NativeCodegen, outer_lambda: ast.Node.Lambda) ClosureError!void {
+    const closure_name = try std.fmt.allocPrint(
+        self.allocator,
+        "__Closure_{d}",
+        .{self.lambda_counter},
+    );
+    self.lambda_counter += 1;
+
+    // Check if body is a lambda (closure case)
+    if (!isClosureLambda(outer_lambda.body.*)) {
+        // Not a closure, fall back to regular lambda
+        return error.NotAClosure;
+    }
+
+    const inner_lambda = outer_lambda.body.lambda;
+
+    // Find captured variables
+    const captured_vars = try findCapturedVars(self, outer_lambda.args, inner_lambda);
+    defer self.allocator.free(captured_vars);
+
+    // Save current output
+    const current_output = try self.output.toOwnedSlice(self.allocator);
+    defer self.allocator.free(current_output);
+
+    // Generate closure struct
+    var closure_code = std.ArrayList(u8){};
+
+    // Struct definition
+    try closure_code.writer(self.allocator).print("const {s} = struct {{\n", .{closure_name});
+
+    // Captured fields
+    for (captured_vars) |var_name| {
+        try closure_code.writer(self.allocator).print("    {s}: i64,\n", .{var_name});
+    }
+    try closure_code.appendSlice(self.allocator, "\n");
+
+    // Call method (inner lambda)
+    try closure_code.appendSlice(self.allocator, "    pub fn call(self: @This()");
+    for (inner_lambda.args) |arg| {
+        try closure_code.writer(self.allocator).print(", {s}: i64", .{arg.name});
+    }
+
+    // Infer return type from inner lambda body
+    const return_type = try inferReturnType(self, inner_lambda.body.*);
+    try closure_code.writer(self.allocator).print(") {s} {{\n", .{return_type});
+    try closure_code.appendSlice(self.allocator, "        return ");
+
+    // Generate inner lambda body with captured variable references
+    const saved_output = self.output;
+    self.output = std.ArrayList(u8){};
+
+    // Generate expression with captured vars prefixed with "self."
+    try genExprWithCapture(self, inner_lambda.body.*, captured_vars);
+
+    const body_code = try self.output.toOwnedSlice(self.allocator);
+    self.output = saved_output;
+
+    try closure_code.appendSlice(self.allocator, body_code);
+    self.allocator.free(body_code);
+
+    try closure_code.appendSlice(self.allocator, ";\n    }\n};\n\n");
+
+    // Generate factory function (outer lambda)
+    const factory_name = try std.fmt.allocPrint(
+        self.allocator,
+        "__lambda_{d}",
+        .{self.lambda_counter},
+    );
+    defer self.allocator.free(factory_name);
+    self.lambda_counter += 1;
+
+    try closure_code.writer(self.allocator).print("fn {s}(", .{factory_name});
+    for (outer_lambda.args, 0..) |arg, i| {
+        if (i > 0) try closure_code.appendSlice(self.allocator, ", ");
+        try closure_code.writer(self.allocator).print("{s}: i64", .{arg.name});
+    }
+    try closure_code.writer(self.allocator).print(") {s} {{\n", .{closure_name});
+    try closure_code.appendSlice(self.allocator, "    return .{\n");
+
+    // Initialize captured fields
+    for (captured_vars) |var_name| {
+        try closure_code.writer(self.allocator).print("        .{s} = {s},\n", .{var_name, var_name});
+    }
+
+    try closure_code.appendSlice(self.allocator, "    };\n}\n\n");
+
+    // Store closure code
+    try self.lambda_functions.append(self.allocator, try closure_code.toOwnedSlice(self.allocator));
+
+    // Restore output
+    self.output = std.ArrayList(u8){};
+    try self.output.appendSlice(self.allocator, current_output);
+
+    // Generate factory call (just the function name, not & prefix for closures)
+    try self.output.appendSlice(self.allocator, factory_name);
+
+    self.allocator.free(closure_name);
+}
+
+/// Mark a variable as holding a closure (so we generate .call())
+pub fn markAsClosure(self: *NativeCodegen, var_name: []const u8) !void {
+    const owned_name = try self.allocator.dupe(u8, var_name);
+    try self.closure_vars.put(owned_name, {});
+}
+
+/// Mark a variable as a closure factory (returns closures)
+pub fn markAsClosureFactory(self: *NativeCodegen, var_name: []const u8) !void {
+    const owned_name = try self.allocator.dupe(u8, var_name);
+    try self.closure_factories.put(owned_name, {});
+}
+
+/// Generate simple closure for lambda capturing outer variables
+/// Example: x = 10; f = lambda y: y + x
+pub fn genSimpleClosureLambda(self: *NativeCodegen, lambda: ast.Node.Lambda, captured_vars: [][]const u8) ClosureError!void {
+    const closure_name = try std.fmt.allocPrint(
+        self.allocator,
+        "__Closure_{d}",
+        .{self.lambda_counter},
+    );
+    self.lambda_counter += 1;
+
+    // Save current output
+    const current_output = try self.output.toOwnedSlice(self.allocator);
+    defer self.allocator.free(current_output);
+
+    // Generate closure struct
+    var closure_code = std.ArrayList(u8){};
+
+    // Struct definition
+    try closure_code.writer(self.allocator).print("const {s} = struct {{\n", .{closure_name});
+
+    // Captured fields
+    for (captured_vars) |var_name| {
+        try closure_code.writer(self.allocator).print("    {s}: i64,\n", .{var_name});
+    }
+    try closure_code.appendSlice(self.allocator, "\n");
+
+    // Call method
+    try closure_code.appendSlice(self.allocator, "    pub fn call(self: @This()");
+    for (lambda.args) |arg| {
+        try closure_code.writer(self.allocator).print(", {s}: i64", .{arg.name});
+    }
+
+    // Infer return type
+    const return_type = try inferReturnType(self, lambda.body.*);
+    try closure_code.writer(self.allocator).print(") {s} {{\n", .{return_type});
+    try closure_code.appendSlice(self.allocator, "        return ");
+
+    // Generate body with captured vars prefixed with "self."
+    const saved_output = self.output;
+    self.output = std.ArrayList(u8){};
+
+    try genExprWithCapture(self, lambda.body.*, captured_vars);
+
+    const body_code = try self.output.toOwnedSlice(self.allocator);
+    self.output = saved_output;
+
+    try closure_code.appendSlice(self.allocator, body_code);
+    self.allocator.free(body_code);
+
+    try closure_code.appendSlice(self.allocator, ";\n    }\n};\n\n");
+
+    // Store closure struct
+    try self.lambda_functions.append(self.allocator, try closure_code.toOwnedSlice(self.allocator));
+
+    // Restore output
+    self.output = std.ArrayList(u8){};
+    try self.output.appendSlice(self.allocator, current_output);
+
+    // Generate closure instantiation: Closure{ .x = x }
+    try self.output.writer(self.allocator).print("{s}{{ ", .{closure_name});
+    for (captured_vars, 0..) |var_name, i| {
+        if (i > 0) try self.output.appendSlice(self.allocator, ", ");
+        try self.output.writer(self.allocator).print(".{s} = {s}", .{var_name, var_name});
+    }
+    try self.output.appendSlice(self.allocator, " }");
+
+    self.allocator.free(closure_name);
+
+    // Return success - caller should mark this variable as a closure
+}
+
+/// Generate expression with captured variable references prefixed with "self."
+fn genExprWithCapture(self: *NativeCodegen, node: ast.Node, captured_vars: [][]const u8) CodegenError!void {
+    switch (node) {
+        .name => |n| {
+            // Check if this variable is captured
+            for (captured_vars) |captured| {
+                if (std.mem.eql(u8, n.id, captured)) {
+                    // Prefix with self.
+                    try self.output.appendSlice(self.allocator, "self.");
+                    try self.output.appendSlice(self.allocator, n.id);
+                    return;
+                }
+            }
+            // Not captured, use directly
+            try self.output.appendSlice(self.allocator, n.id);
+        },
+        .binop => |b| {
+            try self.output.appendSlice(self.allocator, "(");
+            try genExprWithCapture(self, b.left.*, captured_vars);
+
+            const op_str = switch (b.op) {
+                .Add => " + ",
+                .Sub => " - ",
+                .Mult => " * ",
+                .Div => " / ",
+                .FloorDiv => " / ",
+                .Mod => " % ",
+                .Pow => " ** ",
+                .BitAnd => " & ",
+                .BitOr => " | ",
+                .BitXor => " ^ ",
+            };
+            try self.output.appendSlice(self.allocator, op_str);
+
+            try genExprWithCapture(self, b.right.*, captured_vars);
+            try self.output.appendSlice(self.allocator, ")");
+        },
+        .constant => |c| {
+            const expressions = @import("../expressions.zig");
+            // Constants don't need capture handling
+            const saved_output = self.output;
+            self.output = std.ArrayList(u8){};
+            try expressions.genConstant(self, c);
+            const const_code = try self.output.toOwnedSlice(self.allocator);
+            self.output = saved_output;
+            try self.output.appendSlice(self.allocator, const_code);
+            self.allocator.free(const_code);
+        },
+        .call => |c| {
+            try genExprWithCapture(self, c.func.*, captured_vars);
+            try self.output.appendSlice(self.allocator, "(");
+            for (c.args, 0..) |arg, i| {
+                if (i > 0) try self.output.appendSlice(self.allocator, ", ");
+                try genExprWithCapture(self, arg, captured_vars);
+            }
+            try self.output.appendSlice(self.allocator, ")");
+        },
+        .compare => |cmp| {
+            try genExprWithCapture(self, cmp.left.*, captured_vars);
+            for (cmp.ops, 0..) |op, i| {
+                const op_str = switch (op) {
+                    .Eq => " == ",
+                    .NotEq => " != ",
+                    .Lt => " < ",
+                    .LtEq => " <= ",
+                    .Gt => " > ",
+                    .GtEq => " >= ",
+                    else => " == ",
+                };
+                try self.output.appendSlice(self.allocator, op_str);
+                try genExprWithCapture(self, cmp.comparators[i], captured_vars);
+            }
+        },
+        else => {
+            // For other node types, fall back to regular generation
+            const expressions = @import("../expressions.zig");
+            try expressions.genExpr(self, node);
+        },
+    }
+}
+
+/// Infer return type from lambda body expression
+fn inferReturnType(self: *NativeCodegen, body: ast.Node) CodegenError![]const u8 {
+    const inferred_type = self.type_inferrer.inferExpr(body) catch {
+        return "i64";
+    };
+
+    return switch (inferred_type) {
+        .int => "i64",
+        .float => "f64",
+        .bool => "bool",
+        .string => "[]const u8",
+        .list => |_| "std.ArrayList(i64)",
+        .dict => "std.StringHashMap(i64)",
+        else => "i64",
+    };
+}

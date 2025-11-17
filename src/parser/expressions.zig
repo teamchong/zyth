@@ -333,3 +333,52 @@ pub fn parsePower(self: *Parser) ParseError!ast.Node {
 
     return left;
 }
+
+/// Parse lambda expression: lambda x, y: x + y
+pub fn parseLambda(self: *Parser) ParseError!ast.Node {
+    // Consume 'lambda' keyword
+    _ = try self.expect(.Lambda);
+
+    // Parse parameters (comma-separated until ':')
+    var args = std.ArrayList(ast.Arg){};
+
+    // Lambda can have zero parameters: lambda: 5
+    if (!self.check(.Colon)) {
+        while (true) {
+            if (self.peek()) |tok| {
+                if (tok.type == .Ident) {
+                    const param_name = self.advance().?.lexeme;
+                    try args.append(self.allocator, .{
+                        .name = param_name,
+                        .type_annotation = null,
+                    });
+
+                    if (self.match(.Comma)) {
+                        continue;
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            } else {
+                return error.UnexpectedEof;
+            }
+        }
+    }
+
+    // Consume ':' separator
+    _ = try self.expect(.Colon);
+
+    // Parse body (single expression)
+    const body_expr = try parseOrExpr(self);
+    const body_ptr = try self.allocator.create(ast.Node);
+    body_ptr.* = body_expr;
+
+    return ast.Node{
+        .lambda = .{
+            .args = try args.toOwnedSlice(self.allocator),
+            .body = body_ptr,
+        },
+    };
+}

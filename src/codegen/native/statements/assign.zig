@@ -183,10 +183,9 @@ pub fn genAssign(self: *NativeCodegen, assign: ast.Node.Assign) CodegenError!voi
                 // Use const for everything else (literals, function results, etc.)
                 const is_mutated = self.semantic_info.isMutated(var_name);
 
-                // Fallback: check if value contains a self-reference (x = x + 1 pattern)
-                const has_self_ref = valueContainsName(assign.value.*, var_name);
-
-                const needs_var = is_arraylist or is_dict or is_class_instance or is_mutated or has_self_ref;
+                // Use var only if actually mutated OR it's a mutable collection
+                // Don't use has_self_ref heuristic - if semantic analysis says not mutated, trust it
+                const needs_var = is_arraylist or is_dict or is_class_instance or is_mutated;
 
                 if (needs_var) {
                     try self.output.appendSlice(self.allocator, "var ");
@@ -249,6 +248,32 @@ pub fn genAssign(self: *NativeCodegen, assign: ast.Node.Assign) CodegenError!voi
             try self.genExpr(assign.value.*);
 
             try self.output.appendSlice(self.allocator, ";\n");
+
+            const lambda_closure = @import("../expressions/lambda_closure.zig");
+            const lambda_mod = @import("../expressions/lambda.zig");
+
+            // Track closure factories: make_adder = lambda x: lambda y: x + y
+            if (assign.value.* == .lambda and assign.value.lambda.body.* == .lambda) {
+                try lambda_closure.markAsClosureFactory(self, var_name);
+            }
+
+            // Track simple closures: x = 10; f = lambda y: y + x (captures outer variable)
+            if (assign.value.* == .lambda) {
+                // Check if this lambda captures outer variables
+                if (lambda_mod.lambdaCapturesVars(self, assign.value.lambda)) {
+                    // This lambda generated a closure struct, mark it
+                    try lambda_closure.markAsClosure(self, var_name);
+                }
+            }
+
+            // Track closure instances: add_five = make_adder(5)
+            if (assign.value.* == .call and assign.value.call.func.* == .name) {
+                const called_func = assign.value.call.func.name.id;
+                if (self.closure_factories.contains(called_func)) {
+                    // This is calling a closure factory, so the result is a closure
+                    try lambda_closure.markAsClosure(self, var_name);
+                }
+            }
 
             // Add defer cleanup for ArrayLists and Dicts (only on first assignment)
             if (is_first_assignment and is_arraylist) {

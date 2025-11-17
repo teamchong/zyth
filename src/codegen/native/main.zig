@@ -40,6 +40,16 @@ pub const NativeCodegen = struct {
     // Counter for unique tuple unpacking temporary variables
     unpack_counter: usize,
 
+    // Lambda support - counter for unique names, storage for lambda function definitions
+    lambda_counter: usize,
+    lambda_functions: std.ArrayList([]const u8),
+
+    // Track which variables hold closures (for .call() generation)
+    closure_vars: std.StringHashMap(void),
+
+    // Track which variables are closure factories (return closures)
+    closure_factories: std.StringHashMap(void),
+
     pub fn init(allocator: std.mem.Allocator, type_inferrer: *TypeInferrer, semantic_info: *SemanticInfo) !*NativeCodegen {
         const self = try allocator.create(NativeCodegen);
         var scopes = std.ArrayList(std.StringHashMap(void)){};
@@ -57,6 +67,10 @@ pub const NativeCodegen = struct {
             .scopes = scopes,
             .classes = std.StringHashMap(ast.Node.ClassDef).init(allocator),
             .unpack_counter = 0,
+            .lambda_counter = 0,
+            .lambda_functions = std.ArrayList([]const u8){},
+            .closure_vars = std.StringHashMap(void).init(allocator),
+            .closure_factories = std.StringHashMap(void).init(allocator),
         };
         return self;
     }
@@ -69,6 +83,25 @@ pub const NativeCodegen = struct {
         }
         self.scopes.deinit(self.allocator);
         self.classes.deinit();
+        // Clean up lambda functions
+        for (self.lambda_functions.items) |lambda_code| {
+            self.allocator.free(lambda_code);
+        }
+        self.lambda_functions.deinit(self.allocator);
+
+        // Clean up closure tracking HashMaps (free keys)
+        var closure_iter = self.closure_vars.keyIterator();
+        while (closure_iter.next()) |key| {
+            self.allocator.free(key.*);
+        }
+        self.closure_vars.deinit();
+
+        var factory_iter = self.closure_factories.keyIterator();
+        while (factory_iter.next()) |key| {
+            self.allocator.free(key.*);
+        }
+        self.closure_factories.deinit();
+
         self.allocator.destroy(self);
     }
 
@@ -140,7 +173,7 @@ pub const NativeCodegen = struct {
             }
         }
 
-        // PHASE 5: Generate main function
+        // PHASE 6: Generate main function
         try self.emit("pub fn main() !void {\n");
         self.indent();
 
@@ -154,7 +187,8 @@ pub const NativeCodegen = struct {
             try self.emit("const allocator = gpa.allocator();\n\n");
         }
 
-        // PHASE 6: Generate statements (skip class/function defs - already handled)
+        // PHASE 7: Generate statements (skip class/function defs - already handled)
+        // This will populate self.lambda_functions
         for (module.body) |stmt| {
             if (stmt != .function_def and stmt != .class_def) {
                 try self.generateStmt(stmt);
@@ -163,6 +197,56 @@ pub const NativeCodegen = struct {
 
         self.dedent();
         try self.emit("}\n");
+
+        // PHASE 8: Prepend lambda functions if any were generated
+        if (self.lambda_functions.items.len > 0) {
+            // Get current output
+            const current_output = try self.output.toOwnedSlice(self.allocator);
+            defer self.allocator.free(current_output);
+
+            // Rebuild output with lambdas first
+            self.output = std.ArrayList(u8){};
+
+            // Add imports
+            try self.emit("const std = @import(\"std\");\n");
+            try self.emit("const runtime = @import(\"./runtime.zig\");\n");
+            if (analysis.needs_string_utils) {
+                try self.emit("const string_utils = @import(\"string_utils.zig\");\n");
+            }
+            try self.emit("\n");
+
+            // Add __name__ constant
+            try self.emit("const __name__ = \"__main__\";\n\n");
+
+            // Add lambda functions
+            for (self.lambda_functions.items) |lambda_code| {
+                try self.output.appendSlice(self.allocator, lambda_code);
+            }
+
+            // Find where class/function definitions start (after first two const declarations)
+            // Parse current_output to extract everything after imports and __name__
+            var lines = std.mem.splitScalar(u8, current_output, '\n');
+            var skip_count: usize = 0;
+            while (lines.next()) |line| {
+                skip_count += 1;
+                if (std.mem.indexOf(u8, line, "const __name__") != null) {
+                    // Skip this line and the blank line after
+                    _ = lines.next(); // blank line
+                    skip_count += 1;
+                    break;
+                }
+            }
+
+            // Append the rest of the original output (class/func defs + main)
+            var lines2 = std.mem.splitScalar(u8, current_output, '\n');
+            var i: usize = 0;
+            while (lines2.next()) |line| : (i += 1) {
+                if (i >= skip_count) {
+                    try self.output.appendSlice(self.allocator, line);
+                    try self.output.appendSlice(self.allocator, "\n");
+                }
+            }
+        }
 
         return self.output.toOwnedSlice(self.allocator);
     }

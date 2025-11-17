@@ -16,6 +16,7 @@ pub const Node = union(enum) {
     for_stmt: For,
     while_stmt: While,
     function_def: FunctionDef,
+    lambda: Lambda,
     class_def: ClassDef,
     return_stmt: Return,
     list: List,
@@ -95,6 +96,11 @@ pub const Node = union(enum) {
         args: []Arg,
         body: []Node,
         is_async: bool,
+    };
+
+    pub const Lambda = struct {
+        args: []Arg,
+        body: *Node, // Single expression, not statement list
     };
 
     pub const ClassDef = struct {
@@ -277,6 +283,11 @@ pub const Node = union(enum) {
                 allocator.free(f.args);
                 for (f.body) |*n| n.deinit(allocator);
                 allocator.free(f.body);
+            },
+            .lambda => |l| {
+                allocator.free(l.args);
+                l.body.deinit(allocator);
+                allocator.destroy(l.body);
             },
             .class_def => |c| {
                 for (c.body) |*n| n.deinit(allocator);
