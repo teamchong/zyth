@@ -17,7 +17,7 @@ pub fn compileZig(allocator: std.mem.Allocator, zig_code: []const u8, output_pat
 
         const src = std.fs.cwd().openFile(src_path, .{}) catch continue;
         defer src.close();
-        const dst = try std.fs.createFileAbsolute(dst_path, .{});
+        const dst = try std.fs.cwd().createFile(dst_path, .{});
         defer dst.close();
 
         const content = try src.readToEndAlloc(allocator, 1024 * 1024);
@@ -37,7 +37,7 @@ pub fn compileZig(allocator: std.mem.Allocator, zig_code: []const u8, output_pat
     defer allocator.free(tmp_path);
 
     // Write temp file
-    const tmp_file = try std.fs.createFileAbsolute(tmp_path, .{});
+    const tmp_file = try std.fs.cwd().createFile(tmp_path, .{});
     defer tmp_file.close();
     // Keep for debugging - don't delete
     // defer std.fs.deleteFileAbsolute(tmp_path) catch {};
@@ -116,7 +116,7 @@ pub fn compileZigSharedLib(allocator: std.mem.Allocator, zig_code: []const u8, o
 
         const src = std.fs.cwd().openFile(src_path, .{}) catch continue;
         defer src.close();
-        const dst = try std.fs.createFileAbsolute(dst_path, .{});
+        const dst = try std.fs.cwd().createFile(dst_path, .{});
         defer dst.close();
 
         const content = try src.readToEndAlloc(allocator, 1024 * 1024);
@@ -136,7 +136,7 @@ pub fn compileZigSharedLib(allocator: std.mem.Allocator, zig_code: []const u8, o
     defer allocator.free(tmp_path);
 
     // Write temp file
-    const tmp_file = try std.fs.createFileAbsolute(tmp_path, .{});
+    const tmp_file = try std.fs.cwd().createFile(tmp_path, .{});
     defer tmp_file.close();
 
     try tmp_file.writeAll(zig_code);
