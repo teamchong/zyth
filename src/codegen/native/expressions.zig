@@ -53,6 +53,23 @@ fn genConstant(self: *NativeCodegen, constant: ast.Node.Constant) CodegenError!v
 
 /// Generate binary operations (+, -, *, /, %, //)
 fn genBinOp(self: *NativeCodegen, binop: ast.Node.BinOp) CodegenError!void {
+    // Check if this is string concatenation
+    if (binop.op == .Add) {
+        const left_type = try self.type_inferrer.inferExpr(binop.left.*);
+        const right_type = try self.type_inferrer.inferExpr(binop.right.*);
+
+        if (left_type == .string or right_type == .string) {
+            // Use std.mem.concat for raw string concatenation
+            try self.output.appendSlice(self.allocator, "try std.mem.concat(allocator, u8, &[_][]const u8{ ");
+            try genExpr(self, binop.left.*);
+            try self.output.appendSlice(self.allocator, ", ");
+            try genExpr(self, binop.right.*);
+            try self.output.appendSlice(self.allocator, " })");
+            return;
+        }
+    }
+
+    // Regular numeric operations
     try self.output.appendSlice(self.allocator, "(");
     try genExpr(self, binop.left.*);
 

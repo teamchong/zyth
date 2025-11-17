@@ -156,6 +156,16 @@ fn analyzeExpr(node: ast.Node) !ModuleAnalysis {
             const right_analysis = try analyzeExpr(binop.right.*);
             analysis.merge(left_analysis);
             analysis.merge(right_analysis);
+
+            // String concatenation (with +) needs allocator
+            if (binop.op == .Add) {
+                // Check if either side is a string literal
+                if ((binop.left.* == .constant and binop.left.constant.value == .string) or
+                    (binop.right.* == .constant and binop.right.constant.value == .string))
+                {
+                    analysis.needs_allocator = true;
+                }
+            }
         },
         .list => |list| {
             for (list.elts) |elt| {

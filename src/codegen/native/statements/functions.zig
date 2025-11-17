@@ -1,0 +1,249 @@
+/// Function and class definition code generation
+const std = @import("std");
+const ast = @import("../../../ast.zig");
+const NativeCodegen = @import("../main.zig").NativeCodegen;
+const CodegenError = @import("../main.zig").CodegenError;
+
+/// Check if function has a return statement (recursively)
+fn hasReturnStatement(body: []ast.Node) bool {
+    for (body) |stmt| {
+        if (stmt == .return_stmt) return true;
+        // Check nested statements
+        if (stmt == .if_stmt) {
+            if (hasReturnStatement(stmt.if_stmt.body)) return true;
+            if (hasReturnStatement(stmt.if_stmt.else_body)) return true;
+        }
+        if (stmt == .while_stmt) {
+            if (hasReturnStatement(stmt.while_stmt.body)) return true;
+        }
+        if (stmt == .for_stmt) {
+            if (hasReturnStatement(stmt.for_stmt.body)) return true;
+        }
+    }
+    return false;
+}
+
+/// Convert Python type hint to Zig type
+fn pythonTypeToZig(type_hint: ?[]const u8) []const u8 {
+    if (type_hint) |hint| {
+        if (std.mem.eql(u8, hint, "int")) return "i64";
+        if (std.mem.eql(u8, hint, "float")) return "f64";
+        if (std.mem.eql(u8, hint, "bool")) return "bool";
+        if (std.mem.eql(u8, hint, "str")) return "[]const u8";
+    }
+    return "i64"; // Default to i64 instead of anytype (most class fields are integers)
+}
+
+/// Generate function definition
+pub fn genFunctionDef(self: *NativeCodegen, func: ast.Node.FunctionDef) CodegenError!void {
+    // Generate function signature: fn name(param: type, ...) return_type {
+    try self.emit("fn ");
+    try self.emit(func.name);
+    try self.emit("(");
+
+    // Generate parameters
+    for (func.args, 0..) |arg, i| {
+        if (i > 0) try self.emit(", ");
+        try self.emit(arg.name);
+        try self.emit(": ");
+        // Convert Python type hint to Zig type
+        const zig_type = pythonTypeToZig(arg.type_annotation);
+        try self.emit(zig_type);
+    }
+
+    try self.emit(") ");
+
+    // Determine return type based on whether function has return statements
+    if (hasReturnStatement(func.body)) {
+        try self.emit("i64 {\n");
+    } else {
+        try self.emit("void {\n");
+    }
+
+    self.indent();
+
+    // Push new scope for function body
+    try self.pushScope();
+
+    // Generate function body
+    for (func.body) |stmt| {
+        try self.generateStmt(stmt);
+    }
+
+    // Pop scope when exiting function
+    self.popScope();
+
+    self.dedent();
+    try self.emit("}\n");
+}
+
+/// Generate class definition with __init__ constructor
+pub fn genClassDef(self: *NativeCodegen, class: ast.Node.ClassDef) CodegenError!void {
+    // Find __init__ method to determine struct fields
+    var init_method: ?ast.Node.FunctionDef = null;
+    for (class.body) |stmt| {
+        if (stmt == .function_def and std.mem.eql(u8, stmt.function_def.name, "__init__")) {
+            init_method = stmt.function_def;
+            break;
+        }
+    }
+
+    // Generate: const ClassName = struct {
+    try self.emitIndent();
+    try self.output.writer(self.allocator).print("const {s} = struct {{\n", .{class.name});
+    self.indent();
+
+    // Extract fields from __init__ body (self.x = ...)
+    // We map field assignments to parameter types
+    if (init_method) |init| {
+        for (init.body) |stmt| {
+            if (stmt == .assign) {
+                const assign = stmt.assign;
+                // Check if target is self.attribute
+                if (assign.targets.len > 0 and assign.targets[0] == .attribute) {
+                    const attr = assign.targets[0].attribute;
+                    if (attr.value.* == .name and std.mem.eql(u8, attr.value.name.id, "self")) {
+                        // Found field: self.x = y
+                        const field_name = attr.attr;
+
+                        // Determine field type
+                        // If value is a parameter name, use parameter's type annotation
+                        var field_type_str: []const u8 = "i64"; // default
+                        if (assign.value.* == .name) {
+                            const value_name = assign.value.name.id;
+                            // Look up parameter type
+                            for (init.args) |arg| {
+                                if (std.mem.eql(u8, arg.name, value_name)) {
+                                    field_type_str = pythonTypeToZig(arg.type_annotation);
+                                    break;
+                                }
+                            }
+                        } else {
+                            // For non-parameter values, try to infer
+                            const inferred = try self.type_inferrer.inferExpr(assign.value.*);
+                            field_type_str = switch (inferred) {
+                                .int => "i64",
+                                .float => "f64",
+                                .bool => "bool",
+                                .string => "[]const u8",
+                                else => "i64",
+                            };
+                        }
+
+                        try self.emitIndent();
+                        try self.output.writer(self.allocator).print("{s}: {s},\n", .{ field_name, field_type_str });
+                    }
+                }
+            }
+        }
+    }
+
+    // Generate init() method from __init__
+    if (init_method) |init| {
+        try self.output.appendSlice(self.allocator, "\n");
+        try self.emitIndent();
+        try self.output.writer(self.allocator).print("pub fn init(", .{});
+
+        // Parameters (skip 'self')
+        var first = true;
+        for (init.args) |arg| {
+            if (std.mem.eql(u8, arg.name, "self")) continue;
+
+            if (!first) try self.output.appendSlice(self.allocator, ", ");
+            first = false;
+
+            try self.output.writer(self.allocator).print("{s}: ", .{arg.name});
+
+            // Type annotation
+            const param_type = pythonTypeToZig(arg.type_annotation);
+            try self.output.appendSlice(self.allocator, param_type);
+        }
+
+        try self.output.writer(self.allocator).print(") {s} {{\n", .{class.name});
+        self.indent();
+
+        // Generate return statement with field initializers
+        try self.emitIndent();
+        try self.output.writer(self.allocator).print("return {s}{{\n", .{class.name});
+        self.indent();
+
+        // Extract field assignments from __init__ body
+        for (init.body) |stmt| {
+            if (stmt == .assign) {
+                const assign = stmt.assign;
+                if (assign.targets.len > 0 and assign.targets[0] == .attribute) {
+                    const attr = assign.targets[0].attribute;
+                    if (attr.value.* == .name and std.mem.eql(u8, attr.value.name.id, "self")) {
+                        const field_name = attr.attr;
+
+                        try self.emitIndent();
+                        try self.output.writer(self.allocator).print(".{s} = ", .{field_name});
+                        try self.genExpr(assign.value.*);
+                        try self.output.appendSlice(self.allocator, ",\n");
+                    }
+                }
+            }
+        }
+
+        self.dedent();
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "};\n");
+
+        self.dedent();
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "}\n");
+    }
+
+    // Generate regular methods (non-__init__)
+    for (class.body) |stmt| {
+        if (stmt == .function_def) {
+            const method = stmt.function_def;
+            if (std.mem.eql(u8, method.name, "__init__")) continue;
+
+            try self.output.appendSlice(self.allocator, "\n");
+            try self.emitIndent();
+            try self.output.writer(self.allocator).print("pub fn {s}(self: *", .{method.name});
+            try self.output.appendSlice(self.allocator, class.name);
+
+            // Add other parameters (skip 'self')
+            for (method.args) |arg| {
+                if (std.mem.eql(u8, arg.name, "self")) continue;
+                try self.output.appendSlice(self.allocator, ", ");
+                try self.output.writer(self.allocator).print("{s}: ", .{arg.name});
+                const param_type = pythonTypeToZig(arg.type_annotation);
+                try self.output.appendSlice(self.allocator, param_type);
+            }
+
+            try self.output.appendSlice(self.allocator, ") ");
+
+            // Determine return type
+            if (hasReturnStatement(method.body)) {
+                try self.output.appendSlice(self.allocator, "i64");
+            } else {
+                try self.output.appendSlice(self.allocator, "void");
+            }
+
+            try self.output.appendSlice(self.allocator, " {\n");
+            self.indent();
+
+            // Push new scope for method body
+            try self.pushScope();
+
+            // Generate method body
+            for (method.body) |method_stmt| {
+                try self.generateStmt(method_stmt);
+            }
+
+            // Pop scope when exiting method
+            self.popScope();
+
+            self.dedent();
+            try self.emitIndent();
+            try self.output.appendSlice(self.allocator, "}\n");
+        }
+    }
+
+    self.dedent();
+    try self.emitIndent();
+    try self.output.appendSlice(self.allocator, "};\n");
+}
