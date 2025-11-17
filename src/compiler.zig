@@ -223,7 +223,7 @@ fn copyRuntimeDir(allocator: std.mem.Allocator, dir_name: []const u8) !void {
     defer allocator.free(dst_dir_path);
 
     // Create destination directory
-    std.fs.makeDirAbsolute(dst_dir_path) catch |err| {
+    std.fs.cwd().makeDir(dst_dir_path) catch |err| {
         if (err != error.PathAlreadyExists) return err;
     };
 
