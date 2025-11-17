@@ -7,6 +7,16 @@ const CodegenError = @import("../main.zig").CodegenError;
 const expressions = @import("../expressions.zig");
 const genExpr = expressions.genExpr;
 
+/// Check if a node is a compile-time constant (can use comptime)
+fn isComptimeConstant(node: ast.Node) bool {
+    return switch (node) {
+        .constant => true,
+        .unaryop => |u| isComptimeConstant(u.operand.*),
+        .binop => |b| isComptimeConstant(b.left.*) and isComptimeConstant(b.right.*),
+        else => false,
+    };
+}
+
 /// Generate list literal as ArrayList (Python lists are always mutable)
 pub fn genList(self: *NativeCodegen, list: ast.Node.List) CodegenError!void {
     // ALL Python lists must be ArrayList for mutability
@@ -16,13 +26,68 @@ pub fn genList(self: *NativeCodegen, list: ast.Node.List) CodegenError!void {
         return;
     }
 
-    // Non-empty lists: create ArrayList and append elements
+    // Check if all elements are compile-time constants → use comptime optimization!
+    var all_comptime = true;
+    for (list.elts) |elem| {
+        if (!isComptimeConstant(elem)) {
+            all_comptime = false;
+            break;
+        }
+    }
+
+    // COMPTIME PATH: All elements known at compile time
+    if (all_comptime) {
+        try self.output.appendSlice(self.allocator, "blk: {\n");
+        self.indent();
+        try self.emitIndent();
+
+        // Generate comptime tuple
+        try self.output.appendSlice(self.allocator, "const _values = .{ ");
+        for (list.elts, 0..) |elem, i| {
+            if (i > 0) try self.output.appendSlice(self.allocator, ", ");
+            try genExpr(self, elem);
+        }
+        try self.output.appendSlice(self.allocator, " };\n");
+
+        // Let Zig's comptime infer the type and generate optimal code
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "const T = comptime runtime.InferListType(@TypeOf(_values));\n");
+
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "var _list = std.ArrayList(T){};\n");
+
+        // Inline loop - unrolled at Zig compile time!
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "inline for (_values) |val| {\n");
+        self.indent();
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "const cast_val = if (T == f64 and (@TypeOf(val) == i64 or @TypeOf(val) == comptime_int))\n");
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "    @as(f64, @floatFromInt(val))\n");
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "else\n");
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "    val;\n");
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "try _list.append(allocator, cast_val);\n");
+        self.dedent();
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "}\n");
+
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "break :blk _list;\n");
+        self.dedent();
+        try self.emitIndent();
+        try self.output.appendSlice(self.allocator, "}");
+        return;
+    }
+
+    // RUNTIME PATH: Dynamic list (fallback to current widening approach)
     try self.output.appendSlice(self.allocator, "blk: {\n");
     self.indent();
     try self.emitIndent();
 
     // Infer element type using type widening
-    // Start with first element's type, then widen to accommodate all elements
     var elem_type = try self.type_inferrer.inferExpr(list.elts[0]);
 
     // Widen type to accommodate all elements
