@@ -18,6 +18,7 @@ const analyzer = @import("analyzer.zig");
 const dispatch = @import("dispatch.zig");
 const statements = @import("statements.zig");
 const expressions = @import("expressions.zig");
+const comptime_eval = @import("../../analysis/comptime_eval.zig");
 
 /// Error set for code generation
 pub const CodegenError = error{
@@ -56,6 +57,9 @@ pub const NativeCodegen = struct {
     // Variable renames for exception handling (maps original name -> renamed name)
     var_renames: std.StringHashMap([]const u8),
 
+    // Compile-time evaluator for constant folding
+    comptime_evaluator: comptime_eval.ComptimeEvaluator,
+
     pub fn init(allocator: std.mem.Allocator, type_inferrer: *TypeInferrer, semantic_info: *SemanticInfo) !*NativeCodegen {
         const self = try allocator.create(NativeCodegen);
         var scopes = std.ArrayList(std.StringHashMap(void)){};
@@ -79,6 +83,7 @@ pub const NativeCodegen = struct {
             .closure_factories = std.StringHashMap(void).init(allocator),
             .lambda_vars = std.StringHashMap(void).init(allocator),
             .var_renames = std.StringHashMap([]const u8).init(allocator),
+            .comptime_evaluator = comptime_eval.ComptimeEvaluator.init(allocator),
         };
         return self;
     }
