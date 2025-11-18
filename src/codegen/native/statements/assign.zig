@@ -5,6 +5,45 @@ const NativeCodegen = @import("../main.zig").NativeCodegen;
 const CodegenError = @import("../main.zig").CodegenError;
 const helpers = @import("assign_helpers.zig");
 
+/// Check if a list contains only literal values
+fn isConstantList(list: ast.Node.List) bool {
+    if (list.elts.len == 0) return false;
+
+    for (list.elts) |elem| {
+        const is_literal = switch (elem) {
+            .constant => true,
+            else => false,
+        };
+        if (!is_literal) return false;
+    }
+
+    return true;
+}
+
+/// Check if all elements have the same type
+fn allSameType(elements: []ast.Node) bool {
+    if (elements.len == 0) return true;
+
+    const first_const = switch (elements[0]) {
+        .constant => |c| c,
+        else => return false,
+    };
+
+    const first_type_tag = @as(std.meta.Tag(@TypeOf(first_const.value)), first_const.value);
+
+    for (elements[1..]) |elem| {
+        const elem_const = switch (elem) {
+            .constant => |c| c,
+            else => return false,
+        };
+
+        const elem_type_tag = @as(std.meta.Tag(@TypeOf(elem_const.value)), elem_const.value);
+        if (elem_type_tag != first_type_tag) return false;
+    }
+
+    return true;
+}
+
 /// Generate assignment statement with automatic defer cleanup
 pub fn genAssign(self: *NativeCodegen, assign: ast.Node.Assign) CodegenError!void {
     const value_type = try self.type_inferrer.inferExpr(assign.value.*);
@@ -50,7 +89,21 @@ pub fn genAssign(self: *NativeCodegen, assign: ast.Node.Assign) CodegenError!voi
             const var_name = target.name.id;
 
             // Check collection types (still used for type annotation logic)
-            const is_arraylist = (assign.value.* == .list);
+            // Constant homogeneous lists become arrays, not ArrayLists
+            const is_constant_array = blk: {
+                if (assign.value.* != .list) break :blk false;
+                const list = assign.value.list;
+                // If it's a constant list, it becomes an array
+                if (isConstantList(list) and allSameType(list.elts)) break :blk true;
+                break :blk false;
+            };
+            const is_arraylist = blk: {
+                if (assign.value.* != .list) break :blk false;
+                const list = assign.value.list;
+                // If it's a constant list, it becomes an array, not ArrayList
+                if (isConstantList(list) and allSameType(list.elts)) break :blk false;
+                break :blk true;
+            };
             const is_listcomp = (assign.value.* == .listcomp);
             const is_dict = (assign.value.* == .dict);
             const is_class_instance = blk: {
@@ -113,8 +166,6 @@ pub fn genAssign(self: *NativeCodegen, assign: ast.Node.Assign) CodegenError!voi
 
             // Try compile-time evaluation FIRST
             if (self.comptime_evaluator.tryEval(assign.value.*)) |comptime_val| {
-                defer freeComptimeValue(self.allocator, comptime_val);
-
                 // Only apply for simple types (no strings/lists that allocate during evaluation)
                 // TODO: Strings and lists need proper arena allocation to avoid memory leaks
                 const is_simple_type = switch (comptime_val) {
@@ -131,6 +182,7 @@ pub fn genAssign(self: *NativeCodegen, assign: ast.Node.Assign) CodegenError!voi
                     return;
                 }
                 // Fall through to runtime codegen for strings/lists
+                // Don't free - these are either AST-owned or will leak (TODO: arena)
             }
 
             try self.emitIndent();
@@ -164,6 +216,12 @@ pub fn genAssign(self: *NativeCodegen, assign: ast.Node.Assign) CodegenError!voi
 
                 // Mark as declared
                 try self.declareVar(var_name);
+
+                // Track if this variable holds a constant array
+                if (is_constant_array) {
+                    const var_name_copy = try self.allocator.dupe(u8, var_name);
+                    try self.array_vars.put(var_name_copy, {});
+                }
             } else {
                 // Reassignment: x = value (no var/const keyword!)
                 try self.output.appendSlice(self.allocator, var_name);

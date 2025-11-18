@@ -57,6 +57,9 @@ pub const NativeCodegen = struct {
     // Variable renames for exception handling (maps original name -> renamed name)
     var_renames: std.StringHashMap([]const u8),
 
+    // Track which variables hold constant arrays (vs ArrayLists)
+    array_vars: std.StringHashMap(void),
+
     // Compile-time evaluator for constant folding
     comptime_evaluator: comptime_eval.ComptimeEvaluator,
 
@@ -83,6 +86,7 @@ pub const NativeCodegen = struct {
             .closure_factories = std.StringHashMap(void).init(allocator),
             .lambda_vars = std.StringHashMap(void).init(allocator),
             .var_renames = std.StringHashMap([]const u8).init(allocator),
+            .array_vars = std.StringHashMap(void).init(allocator),
             .comptime_evaluator = comptime_eval.ComptimeEvaluator.init(allocator),
         };
         return self;
@@ -124,6 +128,13 @@ pub const NativeCodegen = struct {
         // Clean up variable renames
         self.var_renames.deinit();
 
+        // Clean up array vars tracking
+        var array_iter = self.array_vars.keyIterator();
+        while (array_iter.next()) |key| {
+            self.allocator.free(key.*);
+        }
+        self.array_vars.deinit();
+
         self.allocator.destroy(self);
     }
 
@@ -158,6 +169,11 @@ pub const NativeCodegen = struct {
             const current_scope = &self.scopes.items[self.scopes.items.len - 1];
             try current_scope.put(name, {});
         }
+    }
+
+    /// Check if variable holds a constant array (vs ArrayList)
+    pub fn isArrayVar(self: *NativeCodegen, name: []const u8) bool {
+        return self.array_vars.contains(name);
     }
 
     /// Compile a Python module to a Zig module file
@@ -384,7 +400,13 @@ pub const NativeCodegen = struct {
             try self.emitIndent();
             try self.emit("defer _ = gpa.deinit();\n");
             try self.emitIndent();
-            try self.emit("const allocator = gpa.allocator();\n\n");
+            try self.emit("const allocator = gpa.allocator();\n");
+            // Suppress unused warning if there are constant arrays that don't need allocation
+            if (self.array_vars.count() > 0) {
+                try self.emitIndent();
+                try self.emit("_ = allocator; // May be unused if only constant arrays\n");
+            }
+            try self.emit("\n");
         }
 
         // PHASE 7: Generate statements (skip class/function defs - already handled)

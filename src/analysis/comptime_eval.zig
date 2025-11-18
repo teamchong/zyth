@@ -4,6 +4,45 @@ const string_ops = @import("comptime_string.zig");
 const list_ops = @import("comptime_list.zig");
 const builtin_ops = @import("comptime_builtins.zig");
 
+/// Check if a list contains only literal values
+fn isConstantList(list: []ast.Node) bool {
+    if (list.len == 0) return false;
+
+    for (list) |elem| {
+        const is_literal = switch (elem) {
+            .constant => true,
+            else => false,
+        };
+        if (!is_literal) return false;
+    }
+
+    return true;
+}
+
+/// Check if all elements have the same type
+fn allSameType(elements: []ast.Node) bool {
+    if (elements.len == 0) return true;
+
+    const first_const = switch (elements[0]) {
+        .constant => |c| c,
+        else => return false,
+    };
+
+    const first_type_tag = @as(std.meta.Tag(@TypeOf(first_const.value)), first_const.value);
+
+    for (elements[1..]) |elem| {
+        const elem_const = switch (elem) {
+            .constant => |c| c,
+            else => return false,
+        };
+
+        const elem_type_tag = @as(std.meta.Tag(@TypeOf(elem_const.value)), elem_const.value);
+        if (elem_type_tag != first_type_tag) return false;
+    }
+
+    return true;
+}
+
 /// Compile-time evaluator for constant expressions
 /// Evaluates arithmetic and logical operations on constant values at compile time
 pub const ComptimeEvaluator = struct {
@@ -29,7 +68,14 @@ pub const ComptimeEvaluator = struct {
             .boolop => |bop| self.evalBoolOp(bop),
             .call => |call| self.evalCall(call),
             .subscript => |sub| self.evalSubscript(sub),
-            .list => |l| self.evalListLiteral(l.elts),
+            .list => |l| {
+                // Skip lists that will be optimized to arrays
+                // Arrays are generated directly as Zig code, not as comptime values
+                if (isConstantList(l.elts) and allSameType(l.elts)) {
+                    return null; // Let codegen handle it as array literal
+                }
+                return self.evalListLiteral(l.elts);
+            },
             else => null, // Not constant
         };
     }

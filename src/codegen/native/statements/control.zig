@@ -94,8 +94,53 @@ pub fn genFor(self: *NativeCodegen, for_stmt: ast.Node.For) CodegenError!void {
     // Add .items if it's an ArrayList
     const iter_type = try self.type_inferrer.inferExpr(for_stmt.iter.*);
 
-    // If iterating over list literal, wrap in parens for .items access
-    if (iter_type == .list and for_stmt.iter.* == .list) {
+    // Check if this is a constant list (will be compiled to array, not ArrayList)
+    const is_constant_array = blk: {
+        if (for_stmt.iter.* == .list) {
+            const list = for_stmt.iter.list;
+            // Check if it's a constant homogeneous list (becomes array)
+            if (list.elts.len > 0) {
+                var all_constants = true;
+                for (list.elts) |elem| {
+                    if (elem != .constant) {
+                        all_constants = false;
+                        break;
+                    }
+                }
+                if (all_constants) {
+                    // Check if all same type
+                    const first_type = @as(std.meta.Tag(@TypeOf(list.elts[0].constant.value)), list.elts[0].constant.value);
+                    var all_same = true;
+                    for (list.elts[1..]) |elem| {
+                        const elem_type = @as(std.meta.Tag(@TypeOf(elem.constant.value)), elem.constant.value);
+                        if (elem_type != first_type) {
+                            all_same = false;
+                            break;
+                        }
+                    }
+                    break :blk all_same;
+                }
+            }
+        }
+        break :blk false;
+    };
+
+    // Check if we're iterating over a variable that holds a constant array
+    const is_array_var = blk: {
+        if (for_stmt.iter.* == .name) {
+            const iter_var_name = for_stmt.iter.name.id;
+            break :blk self.isArrayVar(iter_var_name);
+        }
+        break :blk false;
+    };
+
+    // If iterating over constant array literal or array variable, no .items needed
+    // If iterating over ArrayList (variable or inline), add .items
+    if (is_constant_array or is_array_var) {
+        // Constant array or array variable - iterate directly
+        try self.genExpr(for_stmt.iter.*);
+    } else if (iter_type == .list and for_stmt.iter.* == .list) {
+        // Inline ArrayList literal - wrap in parens for .items access
         try self.output.appendSlice(self.allocator, "(");
         try self.genExpr(for_stmt.iter.*);
         try self.output.appendSlice(self.allocator, ").items");

@@ -17,13 +17,84 @@ fn isComptimeConstant(node: ast.Node) bool {
     };
 }
 
+/// Check if a list contains only literal values (candidates for array optimization)
+fn isConstantList(list: ast.Node.List) bool {
+    if (list.elts.len == 0) return false; // Empty lists stay dynamic
+
+    for (list.elts) |elem| {
+        // Check if element is a literal constant
+        const is_literal = switch (elem) {
+            .constant => true,
+            else => false,
+        };
+        if (!is_literal) return false;
+    }
+
+    return true;
+}
+
+/// Check if all elements in a list have the same type (homogeneous)
+fn allSameType(elements: []ast.Node) bool {
+    if (elements.len == 0) return true;
+
+    // Get type tag of first element
+    const first_const = switch (elements[0]) {
+        .constant => |c| c,
+        else => return false,
+    };
+
+    const first_type_tag = @as(std.meta.Tag(@TypeOf(first_const.value)), first_const.value);
+
+    // Check all other elements match
+    for (elements[1..]) |elem| {
+        const elem_const = switch (elem) {
+            .constant => |c| c,
+            else => return false,
+        };
+
+        const elem_type_tag = @as(std.meta.Tag(@TypeOf(elem_const.value)), elem_const.value);
+        if (elem_type_tag != first_type_tag) return false;
+    }
+
+    return true;
+}
+
+/// Generate fixed-size array literal for constant, homogeneous lists
+fn genArrayLiteral(self: *NativeCodegen, list: ast.Node.List) CodegenError!void {
+    // Determine element type from first element
+    const elem_type_str = switch (list.elts[0].constant.value) {
+        .int => "i64",
+        .float => "f64",
+        .string => "[]const u8",
+        .bool => "bool",
+    };
+
+    // Emit array literal: [_]T{elem1, elem2, ...}
+    try self.output.appendSlice(self.allocator, "[_]");
+    try self.output.appendSlice(self.allocator, elem_type_str);
+    try self.output.appendSlice(self.allocator, "{");
+
+    for (list.elts, 0..) |elem, i| {
+        if (i > 0) try self.output.appendSlice(self.allocator, ", ");
+
+        // Emit element value - use genExpr for proper formatting
+        try genExpr(self, elem);
+    }
+
+    try self.output.appendSlice(self.allocator, "}");
+}
+
 /// Generate list literal as ArrayList (Python lists are always mutable)
 pub fn genList(self: *NativeCodegen, list: ast.Node.List) CodegenError!void {
-    // ALL Python lists must be ArrayList for mutability
     // Empty lists
     if (list.elts.len == 0) {
         try self.output.appendSlice(self.allocator, "std.ArrayList(i64){}");
         return;
+    }
+
+    // Check if we can optimize to fixed-size array (constant + homogeneous)
+    if (isConstantList(list) and allSameType(list.elts)) {
+        return try genArrayLiteral(self, list);
     }
 
     // Check if all elements are compile-time constants → use comptime optimization!

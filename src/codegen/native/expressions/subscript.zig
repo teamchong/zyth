@@ -63,30 +63,22 @@ pub fn genSubscript(self: *NativeCodegen, subscript: ast.Node.Subscript) Codegen
                 try genExpr(self, subscript.slice.index.*);
                 try self.output.appendSlice(self.allocator, ").?");
             } else if (is_list) {
-                // ArrayList indexing with bounds checking
-                try self.output.appendSlice(self.allocator, "try runtime.arrayListGet(");
-
-                // Infer element type from list
-                const elem_type = if (value_type == .list) blk: {
-                    const inferred = try self.type_inferrer.inferExpr(subscript.value.*);
-                    // Extract element type from ArrayList
-                    switch (inferred) {
-                        .list => |list_elem_type| break :blk list_elem_type.*,
-                        else => break :blk inferred,
-                    }
-                } else value_type;
-
-                // Generate type parameter
-                try elem_type.toZigType(self.allocator, &self.output);
-                try self.output.appendSlice(self.allocator, ", ");
-
-                // Generate list expression
-                try genExpr(self, subscript.value.*);
-                try self.output.appendSlice(self.allocator, ", ");
-
-                // Generate index expression
-                try genExpr(self, subscript.slice.index.*);
-                try self.output.appendSlice(self.allocator, ")");
+                // ArrayList indexing - use inline bounds checking instead of runtime.arrayListGet
+                // to avoid needing explicit type parameters
+                if (isNegativeConstant(subscript.slice.index.*)) {
+                    // Need block for negative index handling
+                    try self.output.appendSlice(self.allocator, "blk: { const __list = ");
+                    try genExpr(self, subscript.value.*);
+                    try self.output.appendSlice(self.allocator, "; const __idx = ");
+                    try genSliceIndex(self, subscript.slice.index.*, true, true);
+                    try self.output.appendSlice(self.allocator, "; break :blk __list.items[__idx]; }");
+                } else {
+                    // Positive index - simple items access
+                    try genExpr(self, subscript.value.*);
+                    try self.output.appendSlice(self.allocator, ".items[");
+                    try genExpr(self, subscript.slice.index.*);
+                    try self.output.appendSlice(self.allocator, "]");
+                }
             } else {
                 // Array/slice/string indexing: a[b]
                 const is_string = (value_type == .string);

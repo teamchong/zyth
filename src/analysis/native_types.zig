@@ -1,6 +1,48 @@
 const std = @import("std");
 const ast = @import("../ast.zig");
 
+/// Check if a list contains only literal values (candidates for array optimization)
+fn isConstantList(list: ast.Node.List) bool {
+    if (list.elts.len == 0) return false; // Empty lists stay dynamic
+
+    for (list.elts) |elem| {
+        // Check if element is a literal constant
+        const is_literal = switch (elem) {
+            .constant => true,
+            else => false,
+        };
+        if (!is_literal) return false;
+    }
+
+    return true;
+}
+
+/// Check if all elements in a list have the same type (homogeneous)
+fn allSameType(elements: []ast.Node) bool {
+    if (elements.len == 0) return true;
+
+    // Get type tag of first element
+    const first_const = switch (elements[0]) {
+        .constant => |c| c,
+        else => return false,
+    };
+
+    const first_type_tag = @as(std.meta.Tag(@TypeOf(first_const.value)), first_const.value);
+
+    // Check all other elements match
+    for (elements[1..]) |elem| {
+        const elem_const = switch (elem) {
+            .constant => |c| c,
+            else => return false,
+        };
+
+        const elem_type_tag = @as(std.meta.Tag(@TypeOf(elem_const.value)), elem_const.value);
+        if (elem_type_tag != first_type_tag) return false;
+    }
+
+    return true;
+}
+
 /// Native Zig types inferred from Python code
 pub const NativeType = union(enum) {
     // Primitives - stack allocated, zero overhead
@@ -10,7 +52,11 @@ pub const NativeType = union(enum) {
     string: void, // []const u8
 
     // Composites
-    list: *const NativeType, // []T or ArrayList(T)
+    array: struct {
+        element_type: *const NativeType,
+        length: usize, // Comptime-known length
+    }, // [N]T - fixed-size array
+    list: *const NativeType, // ArrayList(T) - dynamic list
     dict: struct {
         key: *const NativeType,
         value: *const NativeType,
@@ -35,6 +81,12 @@ pub const NativeType = union(enum) {
             .float => try buf.appendSlice(allocator, "f64"),
             .bool => try buf.appendSlice(allocator, "bool"),
             .string => try buf.appendSlice(allocator, "[]const u8"),
+            .array => |arr| {
+                const len_str = try std.fmt.allocPrint(allocator, "[{d}]", .{arr.length});
+                defer allocator.free(len_str);
+                try buf.appendSlice(allocator, len_str);
+                try arr.element_type.toZigType(allocator, buf);
+            },
             .list => |elem_type| {
                 try buf.appendSlice(allocator, "std.ArrayList(");
                 try elem_type.toZigType(allocator, buf);
@@ -314,6 +366,8 @@ pub const TypeInferrer = struct {
                             // String indexing returns a single character
                             // For now, treat as string for simplicity
                             break :blk .string;
+                        } else if (obj_type == .array) {
+                            break :blk obj_type.array.element_type.*;
                         } else if (obj_type == .list) {
                             break :blk obj_type.list.*;
                         } else if (obj_type == .dict) {
@@ -335,9 +389,13 @@ pub const TypeInferrer = struct {
                     .slice => {
                         // Slice access always returns same type as container
                         // string[1:4] -> string
+                        // array[1:4] -> slice (converted to list)
                         // list[1:4] -> list
                         if (obj_type == .string) {
                             break :blk .string;
+                        } else if (obj_type == .array) {
+                            // Array slices become lists (dynamic)
+                            break :blk .{ .list = obj_type.array.element_type };
                         } else if (obj_type == .list) {
                             break :blk obj_type;
                         } else {
@@ -367,13 +425,27 @@ pub const TypeInferrer = struct {
                 break :blk .unknown;
             },
             .list => |l| blk: {
-                // Infer element type from first element if available
+                // Check if this is a constant, homogeneous list → use array type
+                if (isConstantList(l) and allSameType(l.elts)) {
+                    const elem_type = if (l.elts.len > 0)
+                        try self.inferExpr(l.elts[0])
+                    else
+                        .unknown;
+
+                    const elem_ptr = try self.allocator.create(NativeType);
+                    elem_ptr.* = elem_type;
+                    break :blk .{ .array = .{
+                        .element_type = elem_ptr,
+                        .length = l.elts.len,
+                    } };
+                }
+
+                // Otherwise, use ArrayList for dynamic lists
                 const elem_type = if (l.elts.len > 0)
                     try self.inferExpr(l.elts[0])
                 else
                     .unknown;
 
-                // Allocate on heap to avoid dangling pointer
                 const elem_ptr = try self.allocator.create(NativeType);
                 elem_ptr.* = elem_type;
                 break :blk .{ .list = elem_ptr };

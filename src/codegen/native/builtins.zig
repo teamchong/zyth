@@ -327,12 +327,23 @@ pub fn genSum(self: *NativeCodegen, args: []ast.Node) CodegenError!void {
     //   break :blk total;
     // }
 
+    // Check if iterating over array variable (no .items) vs ArrayList
+    const is_array_var = blk: {
+        if (args[0] == .name) {
+            const var_name = args[0].name.id;
+            break :blk self.isArrayVar(var_name);
+        }
+        break :blk false;
+    };
+
     try self.output.appendSlice(self.allocator, "blk: {\n");
     try self.output.appendSlice(self.allocator, "var total: i64 = 0;\n");
     try self.output.appendSlice(self.allocator, "for (");
     try self.genExpr(args[0]);
-    // ArrayList needs .items for iteration
-    try self.output.appendSlice(self.allocator, ".items");
+    // ArrayList needs .items for iteration, arrays don't
+    if (!is_array_var) {
+        try self.output.appendSlice(self.allocator, ".items");
+    }
     try self.output.appendSlice(self.allocator, ") |item| { total += item; }\n");
     try self.output.appendSlice(self.allocator, "break :blk total;\n");
     try self.output.appendSlice(self.allocator, "}");
