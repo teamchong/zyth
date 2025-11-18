@@ -82,20 +82,44 @@ pub fn genSubscript(self: *NativeCodegen, subscript: ast.Node.Subscript) Codegen
                 }
             } else {
                 // Array/slice/string indexing: a[b]
-                // Check for negative index
-                if (isNegativeConstant(subscript.slice.index.*)) {
-                    // Need block to access .len
-                    try self.output.appendSlice(self.allocator, "blk: { const __s = ");
-                    try genExpr(self, subscript.value.*);
-                    try self.output.appendSlice(self.allocator, "; break :blk __s[");
-                    try genSliceIndex(self, subscript.slice.index.*, true, false);
-                    try self.output.appendSlice(self.allocator, "]; }");
+                const is_string = (value_type == .string);
+
+                // For strings: Python s[0] returns "h" (string), not 'h' (char)
+                // Zig: s[0] returns u8, need s[0..1] for single-char slice
+                if (is_string) {
+                    // Generate: s[idx..idx+1] to return []const u8 slice
+                    if (isNegativeConstant(subscript.slice.index.*)) {
+                        // Negative index: s[-1..-1+1] = s[-1..0] doesn't work
+                        // Need: blk: { const __s = s; const idx = __s.len - 1; break :blk __s[idx..idx+1]; }
+                        try self.output.appendSlice(self.allocator, "blk: { const __s = ");
+                        try genExpr(self, subscript.value.*);
+                        try self.output.appendSlice(self.allocator, "; const __idx = ");
+                        try genSliceIndex(self, subscript.slice.index.*, true, false);
+                        try self.output.appendSlice(self.allocator, "; break :blk __s[__idx..__idx+1]; }");
+                    } else {
+                        // Positive index: generate idx..idx+1
+                        try self.output.appendSlice(self.allocator, "blk: { const __idx = ");
+                        try genExpr(self, subscript.slice.index.*);
+                        try self.output.appendSlice(self.allocator, "; break :blk ");
+                        try genExpr(self, subscript.value.*);
+                        try self.output.appendSlice(self.allocator, "[__idx..__idx+1]; }");
+                    }
                 } else {
-                    // Positive index - simple subscript
-                    try genExpr(self, subscript.value.*);
-                    try self.output.appendSlice(self.allocator, "[");
-                    try genExpr(self, subscript.slice.index.*);
-                    try self.output.appendSlice(self.allocator, "]");
+                    // Array/slice (not string): use direct indexing
+                    if (isNegativeConstant(subscript.slice.index.*)) {
+                        // Need block to access .len
+                        try self.output.appendSlice(self.allocator, "blk: { const __s = ");
+                        try genExpr(self, subscript.value.*);
+                        try self.output.appendSlice(self.allocator, "; break :blk __s[");
+                        try genSliceIndex(self, subscript.slice.index.*, true, false);
+                        try self.output.appendSlice(self.allocator, "]; }");
+                    } else {
+                        // Positive index - simple subscript
+                        try genExpr(self, subscript.value.*);
+                        try self.output.appendSlice(self.allocator, "[");
+                        try genExpr(self, subscript.slice.index.*);
+                        try self.output.appendSlice(self.allocator, "]");
+                    }
                 }
             }
         },

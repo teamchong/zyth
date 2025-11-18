@@ -127,6 +127,22 @@ fn genCall(self: *NativeCodegen, call: ast.Node.Call) CodegenError!void {
     if (call.func.* == .name) {
         const func_name = call.func.name.id;
 
+        // Check if this is a simple lambda (function pointer)
+        if (self.lambda_vars.contains(func_name)) {
+            // Lambda call: square(5) -> square(5)
+            // Function pointers in Zig are called directly
+            try self.output.appendSlice(self.allocator, func_name);
+            try self.output.appendSlice(self.allocator, "(");
+
+            for (call.args, 0..) |arg, i| {
+                if (i > 0) try self.output.appendSlice(self.allocator, ", ");
+                try genExpr(self, arg);
+            }
+
+            try self.output.appendSlice(self.allocator, ")");
+            return;
+        }
+
         // Check if this is a closure variable
         if (self.closure_vars.contains(func_name)) {
             // Closure call: add_five(3) -> add_five.call(3)
@@ -282,7 +298,7 @@ fn genListComp(self: *NativeCodegen, listcomp: ast.Node.ListComp) CodegenError!v
             try self.emitIndent();
             try self.output.writer(self.allocator).print("const __iter_{d} = ", .{gen_idx});
             try genExpr(self, gen.iter.*);
-            try self.output.appendSlice(self.allocator, ";\n");
+            try self.output.appendSlice(self.allocator, ".items;\n");
 
             try self.emitIndent();
             try self.output.writer(self.allocator).print("for (__iter_{d}) |", .{gen_idx});

@@ -116,6 +116,7 @@ pub fn genAssign(self: *NativeCodegen, assign: ast.Node.Assign) CodegenError!voi
             // ArrayLists, dicts, and class instances need var instead of const for mutation
             // ALL Python lists are ArrayList (mutable), not just empty ones
             const is_arraylist = (assign.value.* == .list);
+            const is_listcomp = (assign.value.* == .listcomp);
             const is_dict = (assign.value.* == .dict);
             const is_class_instance = blk: {
                 if (assign.value.* == .call and assign.value.call.func.* == .name) {
@@ -194,12 +195,13 @@ pub fn genAssign(self: *NativeCodegen, assign: ast.Node.Assign) CodegenError!voi
                 }
                 try self.output.appendSlice(self.allocator, var_name);
 
-                // Only emit type annotation for known types that aren't dicts, lists, tuples, or ArrayLists
-                // For lists/ArrayLists/dicts/tuples, let Zig infer the type from the initializer
+                // Only emit type annotation for known types that aren't dicts, lists, tuples, closures, or ArrayLists
+                // For lists/ArrayLists/dicts/tuples/closures, let Zig infer the type from the initializer
                 // For unknown types (json.loads, etc.), let Zig infer
                 const is_list = (value_type == .list);
                 const is_tuple = (value_type == .tuple);
-                if (value_type != .unknown and !is_dict and !is_arraylist and !is_list and !is_tuple) {
+                const is_closure = (value_type == .closure);
+                if (value_type != .unknown and !is_dict and !is_arraylist and !is_list and !is_tuple and !is_closure) {
                     try self.output.appendSlice(self.allocator, ": ");
                     try value_type.toZigType(self.allocator, &self.output);
                 }
@@ -263,6 +265,14 @@ pub fn genAssign(self: *NativeCodegen, assign: ast.Node.Assign) CodegenError!voi
                 if (lambda_mod.lambdaCapturesVars(self, assign.value.lambda)) {
                     // This lambda generated a closure struct, mark it
                     try lambda_closure.markAsClosure(self, var_name);
+                } else {
+                    // Simple lambda (no captures) - track as function pointer
+                    const key = try self.allocator.dupe(u8, var_name);
+                    try self.lambda_vars.put(key, {});
+
+                    // Register lambda return type for type inference
+                    const return_type = try lambda_mod.getLambdaReturnType(self, assign.value.lambda);
+                    try self.type_inferrer.func_return_types.put(var_name, return_type);
                 }
             }
 
@@ -279,6 +289,11 @@ pub fn genAssign(self: *NativeCodegen, assign: ast.Node.Assign) CodegenError!voi
             if (is_first_assignment and is_arraylist) {
                 try self.emitIndent();
                 try self.output.writer(self.allocator).print("defer {s}.deinit(allocator);\n", .{var_name});
+            }
+            // Add defer cleanup for list comprehensions (return slices, not ArrayLists)
+            if (is_first_assignment and is_listcomp) {
+                try self.emitIndent();
+                try self.output.writer(self.allocator).print("defer allocator.free({s});\n", .{var_name});
             }
             if (is_first_assignment and is_dict) {
                 // Check if dict will use comptime path (all constants AND compatible types)

@@ -17,6 +17,9 @@ pub const NativeType = union(enum) {
     }, // StringHashMap(V)
     tuple: []const NativeType, // Zig tuple struct
 
+    // Functions
+    closure: []const u8, // Closure struct name (__Closure_N)
+
     // Special
     none: void, // void or ?T
     unknown: void, // Fallback to PyObject* (should be rare)
@@ -49,6 +52,7 @@ pub const NativeType = union(enum) {
                 }
                 try buf.appendSlice(allocator, "}");
             },
+            .closure => |name| try buf.appendSlice(allocator, name),
             .none => try buf.appendSlice(allocator, "void"),
             .unknown => try buf.appendSlice(allocator, "*runtime.PyObject"),
         }
@@ -115,12 +119,14 @@ pub const TypeInferrer = struct {
     allocator: std.mem.Allocator,
     var_types: std.StringHashMap(NativeType),
     class_fields: std.StringHashMap(ClassInfo), // class_name -> field types
+    func_return_types: std.StringHashMap(NativeType), // function_name -> return type
 
     pub fn init(allocator: std.mem.Allocator) InferError!TypeInferrer {
         return TypeInferrer{
             .allocator = allocator,
             .var_types = std.StringHashMap(NativeType).init(allocator),
             .class_fields = std.StringHashMap(ClassInfo).init(allocator),
+            .func_return_types = std.StringHashMap(NativeType).init(allocator),
         };
     }
 
@@ -132,6 +138,7 @@ pub const TypeInferrer = struct {
         }
         self.class_fields.deinit();
         self.var_types.deinit();
+        self.func_return_types.deinit();
     }
 
     /// Analyze a module to infer all variable types
@@ -409,9 +416,17 @@ pub const TypeInferrer = struct {
     }
 
     fn inferCall(self: *TypeInferrer, call: ast.Node.Call) InferError!NativeType {
-        // Built-in type conversion functions
+        // Check if this is a registered function (lambda or regular function)
         if (call.func.* == .name) {
             const func_name = call.func.name.id;
+
+            // Check for registered function return types (lambdas, etc.)
+            if (self.func_return_types.get(func_name)) |return_type| {
+                return return_type;
+            }
+
+            // Built-in type conversion functions
+
             if (std.mem.eql(u8, func_name, "str")) return .string;
             if (std.mem.eql(u8, func_name, "int")) return .int;
             if (std.mem.eql(u8, func_name, "float")) return .float;

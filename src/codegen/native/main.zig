@@ -50,6 +50,9 @@ pub const NativeCodegen = struct {
     // Track which variables are closure factories (return closures)
     closure_factories: std.StringHashMap(void),
 
+    // Track which variables hold simple lambdas (function pointers)
+    lambda_vars: std.StringHashMap(void),
+
     pub fn init(allocator: std.mem.Allocator, type_inferrer: *TypeInferrer, semantic_info: *SemanticInfo) !*NativeCodegen {
         const self = try allocator.create(NativeCodegen);
         var scopes = std.ArrayList(std.StringHashMap(void)){};
@@ -71,6 +74,7 @@ pub const NativeCodegen = struct {
             .lambda_functions = std.ArrayList([]const u8){},
             .closure_vars = std.StringHashMap(void).init(allocator),
             .closure_factories = std.StringHashMap(void).init(allocator),
+            .lambda_vars = std.StringHashMap(void).init(allocator),
         };
         return self;
     }
@@ -101,6 +105,12 @@ pub const NativeCodegen = struct {
             self.allocator.free(key.*);
         }
         self.closure_factories.deinit();
+
+        var lambda_iter = self.lambda_vars.keyIterator();
+        while (lambda_iter.next()) |key| {
+            self.allocator.free(key.*);
+        }
+        self.lambda_vars.deinit();
 
         self.allocator.destroy(self);
     }
