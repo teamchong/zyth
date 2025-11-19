@@ -1,15 +1,14 @@
 const std = @import("std");
 
-/// Get unique build directory for this process (for parallel execution)
+/// Get build directory (reuse .build for all processes)
 fn getBuildDir(allocator: std.mem.Allocator) ![]const u8 {
-    const pid = std.c.getpid();
-    return try std.fmt.allocPrint(allocator, ".build-{d}", .{pid});
+    _ = allocator;
+    return ".build";
 }
 
 /// Compile Zig source code to native binary
 pub fn compileZig(allocator: std.mem.Allocator, zig_code: []const u8, output_path: []const u8, c_libraries: []const []const u8) !void {
     const build_dir = try getBuildDir(allocator);
-    defer allocator.free(build_dir);
 
     // Create build directory if it doesn't exist
     std.fs.cwd().makeDir(build_dir) catch |err| {
