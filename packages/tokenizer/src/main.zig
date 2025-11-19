@@ -118,7 +118,7 @@ pub fn main() !void {
         \\Modern language models use BPE tokenization for efficiency.
     ;
 
-    const iterations: usize = 3_000; // ~3-5s workload (~3min total with hyperfine)
+    const iterations: usize = 30_000; // ~30-50s workload for better measurements
 
     const encode_start = std.time.nanoTimestamp();
     var i: usize = 0;

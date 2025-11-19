@@ -155,7 +155,7 @@ fn main() {
         "Modern language models use BPE tokenization for efficiency."
     );
 
-    let iterations = 3_000; // ~3-5s workload (~3min total with hyperfine)
+    let iterations = 30_000; // ~30-50s workload for better measurements
 
     let encode_start = Instant::now();
 
