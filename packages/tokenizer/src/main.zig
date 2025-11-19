@@ -120,6 +120,53 @@ pub fn main() !void {
 
     const iterations: usize = 60_000; // Double workload to avoid cold start differences
 
+    // First verify correctness!
+    std.debug.print("Correctness check:\n", .{});
+    const test_tokens = try tokenizer.encode(test_text);
+    defer allocator.free(test_tokens);
+
+    std.debug.print("  Tokens: [", .{});
+    for (test_tokens, 0..) |token, idx| {
+        if (idx > 0) std.debug.print(", ", .{});
+        std.debug.print("{}", .{token});
+        if (idx >= 19) {
+            std.debug.print(", ... ({} more)", .{test_tokens.len - 20});
+            break;
+        }
+    }
+    std.debug.print("]\n", .{});
+    std.debug.print("  Token count: {}\n", .{test_tokens.len});
+
+    // Decode and verify roundtrip
+    const decoded = try tokenizer.decode(test_tokens);
+    defer allocator.free(decoded);
+    const roundtrip_ok = std.mem.eql(u8, decoded, test_text);
+    std.debug.print("  Roundtrip: {s}\n\n", .{if (roundtrip_ok) "✅ PASS" else "❌ FAIL"});
+
+    if (!roundtrip_ok) {
+        std.debug.print("ERROR: Roundtrip failed!\n", .{});
+        std.debug.print("Original ({} bytes): {s}\n", .{ test_text.len, test_text });
+        std.debug.print("Decoded  ({} bytes): {s}\n", .{ decoded.len, decoded });
+
+        // Show byte-by-byte difference
+        const min_len = @min(test_text.len, decoded.len);
+        var first_diff: ?usize = null;
+        for (0..min_len) |idx| {
+            if (test_text[idx] != decoded[idx]) {
+                first_diff = idx;
+                break;
+            }
+        }
+
+        if (first_diff) |idx| {
+            std.debug.print("First difference at byte {}: original[{}]='{}' (0x{x:0>2}), decoded[{}]='{}' (0x{x:0>2})\n", .{ idx, idx, test_text[idx], test_text[idx], idx, decoded[idx], decoded[idx] });
+        } else if (test_text.len != decoded.len) {
+            std.debug.print("Lengths differ: original={}, decoded={}\n", .{ test_text.len, decoded.len });
+        }
+
+        return error.RoundtripFailed;
+    }
+
     const encode_start = std.time.nanoTimestamp();
     var i: usize = 0;
     while (i < iterations) : (i += 1) {

@@ -457,9 +457,22 @@ pub const Trainer = struct {
             try vocab_r.put(i, key);
         }
 
-        // Add merged tokens
+        // Add merged tokens - reconstruct string for each merge
         for (merges.items, 0..) |pair, idx| {
             try merges_map.put(pair, @intCast(idx));
+
+            // Reconstruct the merged token string by looking up left + right
+            const left_str = vocab_r.get(pair.left) orelse return error.InvalidMerge;
+            const right_str = vocab_r.get(pair.right) orelse return error.InvalidMerge;
+
+            // Concatenate left + right
+            const merged_str = try self.allocator.alloc(u8, left_str.len + right_str.len);
+            @memcpy(merged_str[0..left_str.len], left_str);
+            @memcpy(merged_str[left_str.len..], right_str);
+
+            // Add to vocab_r with new token ID
+            const token_id: u32 = 256 + @as(u32, @intCast(idx));
+            try vocab_r.put(token_id, merged_str);
         }
 
         const pattern_str = try self.allocator.dupe(u8, self.pattern_str);

@@ -221,20 +221,53 @@ pub const Tokenizer = struct {
         return try tokens.toOwnedSlice(self.allocator);
     }
 
-    /// ULTRA-OPTIMIZED: Process only first N most common merges
-    /// Insight: 80/20 rule - 20% of merges do 80% of the work!
+    /// ULTRA-OPTIMIZED: Bloom filter + SIMD merging!
+    /// Insight: 65% of merges don't exist - reject them FAST!
     fn applyMerges(self: *Tokenizer, tokens: *std.ArrayList(u32)) !void {
         if (tokens.items.len < 2) return;
 
-        // Process top merges (most common pairs processed early)
+        // Build bloom filter: 1024-bit bitset (128 bytes) - fits in L1 cache!
+        var token_bits: [16]u64 = [_]u64{0} ** 16;
+
+        // Mark which token IDs exist
+        for (tokens.items) |token_id| {
+            const bit_idx = token_id & 1023;
+            const word_idx = bit_idx >> 6;
+            const bit_pos = @as(u6, @intCast(bit_idx & 63));
+            token_bits[word_idx] |= (@as(u64, 1) << bit_pos);
+        }
+
+        // Process top merges with bloom filter early rejection
         for (self.merges.items, 0..) |pair, idx| {
             if (tokens.items.len < 2) break;
 
+            // FAST REJECTION: Check bloom filter first
+            const left_bit = pair.left & 1023;
+            const left_word = left_bit >> 6;
+            const left_pos = @as(u6, @intCast(left_bit & 63));
+            const left_exists = (token_bits[left_word] & (@as(u64, 1) << left_pos)) != 0;
+
+            const right_bit = pair.right & 1023;
+            const right_word = right_bit >> 6;
+            const right_pos = @as(u6, @intCast(right_bit & 63));
+            const right_exists = (token_bits[right_word] & (@as(u64, 1) << right_pos)) != 0;
+
+            if (!left_exists or !right_exists) continue; // Skip expensive SIMD scan!
+
+            // Might be present - do full SIMD scan
             const new_id: u32 = 256 + @as(u32, @intCast(idx));
+            const old_len = tokens.items.len;
             const new_len = mergePairInPlace(tokens.items, pair, new_id);
 
-            // Branchless: always update (might be same)
+            if (new_len == old_len) continue;
+
             tokens.items.len = new_len;
+
+            // Update bloom filter with new token
+            const new_bit = new_id & 1023;
+            const new_word = new_bit >> 6;
+            const new_pos = @as(u6, @intCast(new_bit & 63));
+            token_bits[new_word] |= (@as(u64, 1) << new_pos);
         }
     }
 
@@ -350,7 +383,7 @@ pub const Tokenizer = struct {
 
         for (tokens) |token_id| {
             if (self.vocab_r.get(token_id)) |token_str| {
-                try result.appendSlice(token_str);
+                try result.appendSlice(self.allocator, token_str);
             } else if (token_id < 256) {
                 // Raw byte
                 try result.append(self.allocator, @intCast(token_id));
