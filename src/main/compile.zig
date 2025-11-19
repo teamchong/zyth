@@ -129,28 +129,13 @@ pub fn compilePythonSource(allocator: std.mem.Allocator, source: []const u8, bin
     defer type_inferrer.deinit();
 
     // PHASE 4.5: Pre-compile imported modules to register their return types
-    // This must happen BEFORE type_inferrer.analyze() so module function calls are typed correctly
-    const imports_mod = @import("../codegen/native/main/imports.zig");
-
-    // No source file when compiling from source directly
-    const source_file_dir: ?[]const u8 = null;
-    // source_file_dir is null, no deallocation needed
+    // Module compilation now happens inline during codegen (no pre-compilation needed)
 
     // Scan imports in the main module
     for (tree.module.body) |stmt| {
-        if (stmt == .import_stmt) {
-            const module_name = stmt.import_stmt.module;
-            // Compile module early to register function return types
-            imports_mod.compileModuleToZig(module_name, source_file_dir, allocator, &type_inferrer) catch |err| {
-                // If module compilation fails, continue (it might be external)
-                std.debug.print("Warning: Could not pre-compile module {s}: {}\n", .{ module_name, err });
-            };
-        } else if (stmt == .import_from) {
-            const module_name = stmt.import_from.module;
-            imports_mod.compileModuleToZig(module_name, source_file_dir, allocator, &type_inferrer) catch {
-                // Module compilation failed - might be external package
-            };
-        }
+        // Module compilation now happens inline during codegen
+        // No need to pre-compile separately
+        _ = stmt;
     }
 
     try type_inferrer.analyze(tree.module);
@@ -269,28 +254,13 @@ pub fn compileFile(allocator: std.mem.Allocator, opts: CompileOptions) !void {
     defer type_inferrer.deinit();
 
     // PHASE 4.5: Pre-compile imported modules to register their return types
-    // This must happen BEFORE type_inferrer.analyze() so module function calls are typed correctly
-    const imports_mod = @import("../codegen/native/main/imports.zig");
-
-    // No source file when compiling from source directly
-    const source_file_dir: ?[]const u8 = null;
-    // source_file_dir is null, no deallocation needed
+    // Module compilation now happens inline during codegen (no pre-compilation needed)
 
     // Scan imports in the main module
     for (tree.module.body) |stmt| {
-        if (stmt == .import_stmt) {
-            const module_name = stmt.import_stmt.module;
-            // Compile module early to register function return types
-            imports_mod.compileModuleToZig(module_name, source_file_dir, allocator, &type_inferrer) catch |err| {
-                // If module compilation fails, continue (it might be external)
-                std.debug.print("Warning: Could not pre-compile module {s}: {}\n", .{ module_name, err });
-            };
-        } else if (stmt == .import_from) {
-            const module_name = stmt.import_from.module;
-            imports_mod.compileModuleToZig(module_name, source_file_dir, allocator, &type_inferrer) catch {
-                // Module compilation failed - might be external package
-            };
-        }
+        // Module compilation now happens inline during codegen
+        // No need to pre-compile separately
+        _ = stmt;
     }
 
     try type_inferrer.analyze(tree.module);

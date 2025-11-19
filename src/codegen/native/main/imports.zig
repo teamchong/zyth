@@ -18,15 +18,25 @@ fn inferReturnTypeFromString(
     return .int;
 }
 
-/// Compile a Python module to a Zig module file
-/// Returns error if module .py file cannot be found
-/// Accepts optional type_inferrer to register module function return types
-pub fn compileModuleToZig(
+/// Compile a Python module as an inlined Zig struct
+/// Returns Zig code as a string (caller must free)
+/// parent_module_prefix: For submodules, the full parent path (e.g. "testpkg.submod")
+pub fn compileModuleAsStruct(
     module_name: []const u8,
     source_file_dir: ?[]const u8,
     allocator: std.mem.Allocator,
     main_type_inferrer: ?*@import("../../../analysis/native_types.zig").TypeInferrer,
-) !void {
+) ![]const u8 {
+    return compileModuleAsStructWithPrefix(module_name, null, source_file_dir, allocator, main_type_inferrer);
+}
+
+fn compileModuleAsStructWithPrefix(
+    module_name: []const u8,
+    parent_prefix: ?[]const u8,
+    source_file_dir: ?[]const u8,
+    allocator: std.mem.Allocator,
+    main_type_inferrer: ?*@import("../../../analysis/native_types.zig").TypeInferrer,
+) ![]const u8 {
     // Use import resolver to find the .py file
     const py_path = try import_resolver.resolveImport(module_name, source_file_dir, allocator) orelse {
         std.debug.print("Error: Cannot find module '{s}.py'\n", .{module_name});
@@ -39,8 +49,25 @@ pub fn compileModuleToZig(
     };
     defer allocator.free(py_path);
 
-    // Read source
-    const source = try std.fs.cwd().readFileAlloc(allocator, py_path, 10 * 1024 * 1024);
+    // Analyze if this is a package with submodules
+    var pkg_info = try import_resolver.analyzePackage(py_path, allocator);
+    defer pkg_info.deinit(allocator);
+
+    // Read source (handle both relative and absolute paths)
+    const source = blk: {
+        // Try as absolute path first
+        if (std.fs.path.isAbsolute(py_path)) {
+            const file = std.fs.openFileAbsolute(py_path, .{}) catch |err| {
+                std.debug.print("Error: Cannot read file '{s}': {}\n", .{ py_path, err });
+                return error.ModuleNotFound;
+            };
+            defer file.close();
+            break :blk try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
+        } else {
+            // Relative path
+            break :blk try std.fs.cwd().readFileAlloc(allocator, py_path, 10 * 1024 * 1024);
+        }
+    };
     defer allocator.free(source);
 
     // Lex, parse, analyze
@@ -73,9 +100,7 @@ pub fn compileModuleToZig(
     var codegen = try NativeCodegen.init(allocator, &type_inferrer, &semantic_info);
     defer codegen.deinit();
 
-    // Generate imports
-    try codegen.emit("const std = @import(\"std\");\n");
-    try codegen.emit("const runtime = @import(\"./runtime.zig\");\n\n");
+    // Don't generate imports for inlined modules (they'll use parent scope's imports)
 
     // Generate only function and class definitions (make all functions pub)
     for (tree.module.body) |stmt| {
@@ -126,8 +151,11 @@ pub fn compileModuleToZig(
 
                 // Register module function return type in main type inferrer
                 if (main_type_inferrer) |type_inf| {
-                    // Format: "module.function" -> return type
-                    const qualified_name = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ module_name, func.name });
+                    // Format: "module.function" or "parent.module.function" -> return type
+                    const qualified_name = if (parent_prefix) |prefix|
+                        try std.fmt.allocPrint(allocator, "{s}.{s}.{s}", .{ prefix, module_name, func.name })
+                    else
+                        try std.fmt.allocPrint(allocator, "{s}.{s}", .{ module_name, func.name });
                     try type_inf.func_return_types.put(qualified_name, return_type);
                     // Note: qualified_name is kept allocated for the lifetime of the map
                 }
@@ -179,21 +207,90 @@ pub fn compileModuleToZig(
         }
     }
 
-    const zig_code = try codegen.output.toOwnedSlice(allocator);
-    defer allocator.free(zig_code);
+    const module_body = try codegen.output.toOwnedSlice(allocator);
+    defer allocator.free(module_body);
 
-    // Create .build directory if it doesn't exist
-    std.fs.cwd().makeDir(".build") catch |err| {
-        if (err != error.PathAlreadyExists) return err;
-    };
+    // Compile submodules if this is a package
+    var submodule_code = std.ArrayList(u8){};
+    defer submodule_code.deinit(allocator);
 
-    // Write to .build/module_name.zig
-    const zig_path = try std.fmt.allocPrint(allocator, ".build/{s}.zig", .{module_name});
-    defer allocator.free(zig_path);
+    if (pkg_info.is_package and pkg_info.submodules.len > 0) {
+        for (pkg_info.submodules) |submod_name| {
+            // Build path to submodule
+            const submod_path = try std.fmt.allocPrint(
+                allocator,
+                "{s}/{s}.py",
+                .{ pkg_info.package_dir, submod_name }
+            );
+            defer allocator.free(submod_path);
 
-    const file = try std.fs.cwd().createFile(zig_path, .{});
-    defer file.close();
-    try file.writeAll(zig_code);
+            // Check if submodule exists
+            std.fs.cwd().access(submod_path, .{}) catch continue;
+
+            // Compile submodule (recursively, in case it's also a package)
+            // Build full qualified prefix for submodule
+            const submod_prefix = if (parent_prefix) |prefix|
+                try std.fmt.allocPrint(allocator, "{s}.{s}", .{ prefix, module_name })
+            else
+                try allocator.dupe(u8, module_name);
+            defer allocator.free(submod_prefix);
+
+            const submod_struct = compileModuleAsStructWithPrefix(
+                submod_name,
+                submod_prefix,
+                pkg_info.package_dir,
+                allocator,
+                main_type_inferrer
+            ) catch |err| {
+                std.debug.print("Warning: Could not compile submodule {s}.{s}: {}\n", .{ module_name, submod_name, err });
+                continue;
+            };
+            defer allocator.free(submod_struct);
+
+            // Extract just the struct body (remove outer const declaration)
+            const struct_body = blk: {
+                // Find "const submod_name = struct {"
+                const struct_start = std.mem.indexOf(u8, submod_struct, "struct {") orelse break :blk submod_struct;
+                const body_start = struct_start + "struct {".len;
+
+                // Find closing "};"
+                var brace_count: i32 = 1;
+                var i = body_start;
+                while (i < submod_struct.len and brace_count > 0) : (i += 1) {
+                    if (submod_struct[i] == '{') brace_count += 1;
+                    if (submod_struct[i] == '}') brace_count -= 1;
+                }
+
+                if (brace_count == 0 and i > body_start) {
+                    break :blk submod_struct[body_start..i-1]; // Exclude closing brace
+                }
+                break :blk submod_struct;
+            };
+
+            // Add as nested struct
+            try submodule_code.writer(allocator).print(
+                "    pub const {s} = struct {{\n" ++
+                "{s}" ++
+                "    }};\n\n",
+                .{ submod_name, struct_body }
+            );
+        }
+    }
+
+    // Wrap in struct with submodules
+    var struct_code = std.ArrayList(u8){};
+    errdefer struct_code.deinit(allocator);
+
+    try struct_code.writer(allocator).print(
+        "// Inlined module: {s}\n" ++
+        "const {s} = struct {{\n" ++
+        "{s}" ++  // Main module body
+        "{s}" ++  // Submodules
+        "}};\n\n",
+        .{ module_name, module_name, module_body, submodule_code.items }
+    );
+
+    return try struct_code.toOwnedSlice(allocator);
 }
 
 /// Scan AST for import statements and collect module names with registry lookup

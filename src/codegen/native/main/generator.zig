@@ -22,16 +22,29 @@ pub fn generate(self: *NativeCodegen, module: ast.Node.Module) ![]const u8 {
         null;
     defer if (source_file_dir) |dir| self.allocator.free(dir);
 
-    // PHASE 1.6: Collect imports and compile imported modules
+    // PHASE 1.6: Collect imports and compile imported modules as inlined structs
     var imported_modules = try imports.collectImports(self, module, source_file_dir);
     defer imported_modules.deinit(self.allocator);
 
-    // Compile each imported module to .zig file
-    // Pass type_inferrer so module function return types are registered
+    // Store compiled module structs for later emission
+    var inlined_modules = std.ArrayList([]const u8){};
+    defer {
+        for (inlined_modules.items) |code| self.allocator.free(code);
+        inlined_modules.deinit(self.allocator);
+    }
+
+    // Compile each imported module as struct
     for (imported_modules.items) |mod_name| {
-        imports.compileModuleToZig(mod_name, source_file_dir, self.allocator, self.type_inferrer) catch {
+        const struct_code = imports.compileModuleAsStruct(
+            mod_name,
+            source_file_dir,
+            self.allocator,
+            self.type_inferrer
+        ) catch {
             // Module compilation failed - likely external package, skip it
+            continue;
         };
+        try inlined_modules.append(self.allocator, struct_code);
     }
 
     // PHASE 2: Register all classes for inheritance support
@@ -70,50 +83,44 @@ pub fn generate(self: *NativeCodegen, module: ast.Node.Module) ![]const u8 {
         }
     }
 
-    // Add user module imports using registry
-    for (imported_modules.items) |mod_name| {
+    // PHASE 3.7: Emit inlined module structs
+    // For user modules and third-party packages, inline as structs
+    // For PyAOT runtime modules, use registry imports
+    for (imported_modules.items, 0..) |mod_name, i| {
         // Track this module name for call site handling
         const mod_copy = try self.allocator.dupe(u8, mod_name);
         try self.imported_modules.put(mod_copy, {});
-
-        try self.emit("const ");
-        try self.emit(mod_name);
-        try self.emit(" = ");
 
         // Look up module in registry
         if (self.import_registry.lookup(mod_name)) |info| {
             switch (info.strategy) {
                 .zig_runtime, .c_library => {
-                    // Use Zig import from registry
+                    // Use Zig import from registry (not inlined)
+                    try self.emit("const ");
+                    try self.emit(mod_name);
+                    try self.emit(" = ");
                     if (info.zig_import) |zig_import| {
                         try self.emit(zig_import);
                     } else {
-                        // Fallback to user module
-                        try self.emit("@import(\"");
+                        try self.emit("struct {}; // TODO: ");
                         try self.emit(mod_name);
-                        try self.emit(".zig\")");
+                        try self.emit(" not implemented");
                     }
+                    try self.emit(";\n");
                 },
-                .compile_python => {
-                    // Import compiled Python module
-                    try self.emit("@import(\"");
-                    try self.emit(mod_name);
-                    try self.emit(".zig\")");
-                },
-                .unsupported => {
-                    // Generate comment for unsupported modules
-                    try self.emit("struct {}; // TODO: ");
-                    try self.emit(mod_name);
-                    try self.emit(" not supported yet");
+                .compile_python, .unsupported => {
+                    // Emit inlined struct code
+                    if (i < inlined_modules.items.len) {
+                        try self.emit(inlined_modules.items[i]);
+                    }
                 },
             }
         } else {
-            // Module not in registry - assume user module
-            try self.emit("@import(\"");
-            try self.emit(mod_name);
-            try self.emit(".zig\")");
+            // User module - emit inlined struct
+            if (i < inlined_modules.items.len) {
+                try self.emit(inlined_modules.items[i]);
+            }
         }
-        try self.emit(";\n");
     }
 
     try self.emit("\n");

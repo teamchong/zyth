@@ -309,20 +309,52 @@ fn inferCall(
     if (call.func.* == .attribute) {
         const attr = call.func.attribute;
 
-        // Check for module function calls (module.function)
-        if (attr.value.* == .name) {
-            const module_name = attr.value.name.id;
-            const func_name = attr.attr;
+        // Helper to build full qualified name for nested attributes
+        // e.g., testpkg.submod.sub_func -> "testpkg.submod.sub_func"
+        const buildQualifiedName = struct {
+            fn build(node: *const ast.Node, buf: []u8) []const u8 {
+                if (node.* == .name) {
+                    // Base case: just a name
+                    const name = node.name.id;
+                    if (name.len > buf.len) return &[_]u8{};
+                    @memcpy(buf[0..name.len], name);
+                    return buf[0..name.len];
+                } else if (node.* == .attribute) {
+                    // Recursive case: build prefix, then add .attr
+                    const prefix = build(node.attribute.value, buf);
+                    if (prefix.len == 0) return &[_]u8{};
+                    const attr_name = node.attribute.attr;
+                    const total_len = prefix.len + 1 + attr_name.len;
+                    if (total_len > buf.len) return &[_]u8{};
+                    buf[prefix.len] = '.';
+                    @memcpy(buf[prefix.len + 1..total_len], attr_name);
+                    return buf[0..total_len];
+                }
+                return &[_]u8{};
+            }
+        }.build;
 
-            // Try to look up module.function in func_return_types
-            // Format: "module.function" -> return type
-            var buf: [256]u8 = undefined;
-            const qualified_name = std.fmt.bufPrint(&buf, "{s}.{s}", .{ module_name, func_name }) catch &[_]u8{};
-            if (qualified_name.len > 0) {
+        // Build full qualified name including the function
+        var buf: [512]u8 = undefined;
+        const prefix = buildQualifiedName(attr.value, buf[0..]);
+        if (prefix.len > 0) {
+            const total_len = prefix.len + 1 + attr.attr.len;
+            if (total_len <= buf.len) {
+                buf[prefix.len] = '.';
+                @memcpy(buf[prefix.len + 1..total_len], attr.attr);
+                const qualified_name = buf[0..total_len];
+
+                // Look up in func_return_types (module.function -> return type)
                 if (func_return_types.get(qualified_name)) |return_type| {
                     return return_type;
                 }
             }
+        }
+
+        // Check for module function calls (module.function) - single level
+        if (attr.value.* == .name) {
+            const module_name = attr.value.name.id;
+            const func_name = attr.attr;
 
             // json.loads() returns PyObject (dict)
             // Type is unknown at compile time, will use formatPyObject at runtime

@@ -87,11 +87,23 @@ pub fn genCall(self: *NativeCodegen, call: ast.Node.Call) CodegenError!void {
     if (call.func.* == .attribute) {
         const attr = call.func.attribute;
 
-        // Check if this is an imported module call (mymath.add)
-        const is_module_call = if (attr.value.* == .name)
-            self.imported_modules.contains(attr.value.name.id)
-        else
-            false;
+        // Helper to check if attribute chain starts with imported module
+        const is_module_call = blk: {
+            var current = attr.value;
+            while (true) {
+                if (current.* == .name) {
+                    // Found base name - check if it's an imported module
+                    break :blk self.imported_modules.contains(current.name.id);
+                } else if (current.* == .attribute) {
+                    // Keep traversing the chain
+                    current = current.attribute.value;
+                } else {
+                    // Not a name or attribute (e.g., a method call result)
+                    break :blk false;
+                }
+            }
+            break :blk false;
+        };
 
         // Add 'try' for module calls (they can error)
         if (is_module_call) {
