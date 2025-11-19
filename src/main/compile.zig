@@ -13,6 +13,7 @@ const notebook = @import("../notebook.zig");
 const CompileOptions = @import("../main.zig").CompileOptions;
 const utils = @import("utils.zig");
 const cache = @import("cache.zig");
+const import_resolver = @import("../import_resolver.zig");
 
 pub fn compileModule(allocator: std.mem.Allocator, module_path: []const u8, module_name: []const u8) !void {
     // Stub for now - compile imported modules as separate shared libraries
@@ -128,14 +129,26 @@ pub fn compilePythonSource(allocator: std.mem.Allocator, source: []const u8, bin
     var type_inferrer = try native_types.TypeInferrer.init(allocator);
     defer type_inferrer.deinit();
 
-    // PHASE 4.5: Pre-compile imported modules to register their return types
-    // Module compilation now happens inline during codegen (no pre-compilation needed)
+    // PHASE 4.5: Pre-compile imported modules to register function return types
+    const source_file_dir_str = ".";
+    const source_file_dir: ?[]const u8 = source_file_dir_str;
 
-    // Scan imports in the main module
+    const imports_mod = @import("../codegen/native/main/imports.zig");
+
     for (tree.module.body) |stmt| {
-        // Module compilation now happens inline during codegen
-        // No need to pre-compile separately
-        _ = stmt;
+        if (stmt == .import_stmt) {
+            const module_name = stmt.import_stmt.module;
+            const compiled = imports_mod.compileModuleAsStruct(
+                module_name,
+                source_file_dir,
+                allocator,
+                &type_inferrer
+            ) catch |err| {
+                std.debug.print("Warning: Could not pre-compile module {s}: {}\n", .{ module_name, err });
+                continue;
+            };
+            allocator.free(compiled);
+        }
     }
 
     try type_inferrer.analyze(tree.module);
@@ -253,14 +266,26 @@ pub fn compileFile(allocator: std.mem.Allocator, opts: CompileOptions) !void {
     var type_inferrer = try native_types.TypeInferrer.init(allocator);
     defer type_inferrer.deinit();
 
-    // PHASE 4.5: Pre-compile imported modules to register their return types
-    // Module compilation now happens inline during codegen (no pre-compilation needed)
+    // PHASE 4.5: Pre-compile imported modules to register function return types
+    const source_file_dir_str = ".";
+    const source_file_dir: ?[]const u8 = source_file_dir_str;
 
-    // Scan imports in the main module
+    const imports_mod = @import("../codegen/native/main/imports.zig");
+
     for (tree.module.body) |stmt| {
-        // Module compilation now happens inline during codegen
-        // No need to pre-compile separately
-        _ = stmt;
+        if (stmt == .import_stmt) {
+            const module_name = stmt.import_stmt.module;
+            const compiled = imports_mod.compileModuleAsStruct(
+                module_name,
+                source_file_dir,
+                allocator,
+                &type_inferrer
+            ) catch |err| {
+                std.debug.print("Warning: Could not pre-compile module {s}: {}\n", .{ module_name, err });
+                continue;
+            };
+            allocator.free(compiled);
+        }
     }
 
     try type_inferrer.analyze(tree.module);
