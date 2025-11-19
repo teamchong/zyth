@@ -1,0 +1,12 @@
+[package]
+name = "rustbpe_bench"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ahash = "0.8"
+rayon = "1.10"
+
+[[bin]]
+name = "bench"
+path = "src/main.rs"
