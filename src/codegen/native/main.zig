@@ -66,6 +66,9 @@ pub const NativeCodegen = struct {
     // Compile-time evaluator for constant folding
     comptime_evaluator: comptime_eval.ComptimeEvaluator,
 
+    // C library import context (for numpy, etc.)
+    import_ctx: ?*const @import("c_interop").ImportContext,
+
     pub fn init(allocator: std.mem.Allocator, type_inferrer: *TypeInferrer, semantic_info: *SemanticInfo) !*NativeCodegen {
         const self = try allocator.create(NativeCodegen);
         var scopes = std.ArrayList(std.StringHashMap(void)){};
@@ -92,8 +95,13 @@ pub const NativeCodegen = struct {
             .array_vars = std.StringHashMap(void).init(allocator),
             .array_slice_vars = std.StringHashMap(void).init(allocator),
             .comptime_evaluator = comptime_eval.ComptimeEvaluator.init(allocator),
+            .import_ctx = null,
         };
         return self;
+    }
+
+    pub fn setImportContext(self: *NativeCodegen, ctx: *const @import("c_interop").ImportContext) void {
+        self.import_ctx = ctx;
     }
 
     pub fn deinit(self: *NativeCodegen) void {
@@ -342,6 +350,8 @@ pub const NativeCodegen = struct {
                     }
                 }
 
+                // Include C library modules in imports (they will be mapped to c_interop/*.zig)
+                // Only skip standard library modules
                 if (!is_stdlib) {
                     try imports.append(allocator, module_name);
                 }
@@ -380,13 +390,35 @@ pub const NativeCodegen = struct {
             try self.emit("const string_utils = @import(\"string_utils.zig\");\n");
         }
 
+        // PHASE 3.5: Generate C library imports (if any detected)
+        if (self.import_ctx) |ctx| {
+            const c_import_block = try ctx.generateCImportBlock(self.allocator);
+            defer self.allocator.free(c_import_block);
+            if (c_import_block.len > 0) {
+                try self.emit(c_import_block);
+            }
+        }
+
         // Add user module imports
+        const library_map = std.StaticStringMap([]const u8).initComptime(.{
+            .{ "numpy", "c_interop/numpy.zig" },
+            .{ "sqlite3", "c_interop/sqlite3.zig" },
+            .{ "zlib", "c_interop/zlib.zig" },
+            .{ "ssl", "c_interop/zlib.zig" },
+        });
+
         for (imported_modules.items) |mod_name| {
             try self.emit("const ");
             try self.emit(mod_name);
             try self.emit(" = @import(\"");
-            try self.emit(mod_name);
-            try self.emit(".zig\");\n");
+            // Check if this is a C library import
+            if (library_map.get(mod_name)) |zig_path| {
+                try self.emit(zig_path);
+            } else {
+                try self.emit(mod_name);
+                try self.emit(".zig");
+            }
+            try self.emit("\");\n");
         }
 
         try self.emit("\n");
@@ -394,9 +426,13 @@ pub const NativeCodegen = struct {
         // PHASE 4: Define __name__ constant (for if __name__ == "__main__" support)
         try self.emit("const __name__ = \"__main__\";\n\n");
 
-        // PHASE 5: Generate class and function definitions (before main)
+        // PHASE 5: Generate imports, class and function definitions (before main)
         for (module.body) |stmt| {
-            if (stmt == .class_def) {
+            if (stmt == .import_stmt) {
+                try statements.genImport(self, stmt.import_stmt);
+            } else if (stmt == .import_from) {
+                try statements.genImportFrom(self, stmt.import_from);
+            } else if (stmt == .class_def) {
                 try statements.genClassDef(self, stmt.class_def);
                 try self.emit("\n");
             } else if (stmt == .function_def) {
@@ -425,10 +461,10 @@ pub const NativeCodegen = struct {
             try self.emit("\n");
         }
 
-        // PHASE 7: Generate statements (skip class/function defs - already handled)
+        // PHASE 7: Generate statements (skip class/function defs and imports - already handled)
         // This will populate self.lambda_functions
         for (module.body) |stmt| {
-            if (stmt != .function_def and stmt != .class_def) {
+            if (stmt != .function_def and stmt != .class_def and stmt != .import_stmt and stmt != .import_from) {
                 try self.generateStmt(stmt);
             }
         }
@@ -501,7 +537,7 @@ pub const NativeCodegen = struct {
             .assert_stmt => |assert_node| try statements.genAssert(self, assert_node),
             .try_stmt => |try_node| try statements.genTry(self, try_node),
             .class_def => |class| try statements.genClassDef(self, class),
-            .import_stmt => {}, // Native modules - no import needed
+            .import_stmt => |import| try statements.genImport(self, import),
             .import_from => |import| try statements.genImportFrom(self, import),
             .pass => try statements.genPass(self),
             .break_stmt => try statements.genBreak(self),

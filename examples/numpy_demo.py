@@ -1,23 +1,24 @@
-# NumPy Demo - PyAOT calling NumPy via FFI
+# NumPy + BLAS Demo - Full working implementation
 
-import numpy as np
+import numpy
 
-print("Creating NumPy array...")
-a = np.array([1, 2, 3, 4, 5])
-print(a)
+print("PyAOT NumPy Demo - Direct BLAS Integration")
 
-print("Computing sum...")
-s = np.sum(a)
-print(s)
+# Create arrays
+a = numpy.array([1.0, 2.0, 3.0])
+b = numpy.array([4.0, 5.0, 6.0])
+print("Created arrays a and b")
 
-print("Computing mean...")
-m = np.mean(a)
-print(m)
+# Dot product using BLAS cblas_ddot
+result = numpy.dot(a, b)
+print("Dot product:", result)
 
-print("Computing min/max...")
-min_val = np.min(a)
-max_val = np.max(a)
-print(min_val)
-print(max_val)
+# Sum
+total = numpy.sum(a)
+print("Sum:", total)
 
-print("NumPy FFI working!")
+# Mean
+avg = numpy.mean(a)
+print("Mean:", avg)
+
+print("All operations use direct BLAS calls!")

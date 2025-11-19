@@ -80,32 +80,21 @@ pub fn genReturn(self: *NativeCodegen, ret: ast.Node.Return) CodegenError!void {
 }
 
 /// Generate import statement: import module
-/// For now, just ignore - modules will be compiled separately
+/// Import statements are now handled at module level in main.zig
+/// This function is a no-op since imports are collected and generated in PHASE 3
 pub fn genImport(self: *NativeCodegen, import: ast.Node.Import) CodegenError!void {
     _ = self;
     _ = import;
-    // Import statement is ignored in codegen
-    // Modules are compiled separately and linked via @import
+    // No-op: imports are handled at module level, not during statement generation
 }
 
 /// Generate from-import statement: from module import names
-/// For MVP, just comment out imports - assume functions are in same file
+/// Import statements are now handled at module level in main.zig
+/// This function is a no-op since imports are collected and generated in PHASE 3
 pub fn genImportFrom(self: *NativeCodegen, import: ast.Node.ImportFrom) CodegenError!void {
-    try self.emitIndent();
-    try self.emit("// from ");
-    try self.emit(import.module);
-    try self.emit(" import ");
-
-    for (import.names, 0..) |name, i| {
-        if (i > 0) try self.emit(", ");
-        try self.emit(name);
-        // Handle aliases if present
-        if (import.asnames[i]) |asname| {
-            try self.emit(" as ");
-            try self.emit(asname);
-        }
-    }
-    try self.emit("\n");
+    _ = self;
+    _ = import;
+    // No-op: imports are handled at module level, not during statement generation
 }
 
 /// Generate print() function call

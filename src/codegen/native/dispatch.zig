@@ -9,18 +9,42 @@ const CodegenError = @import("main.zig").CodegenError;
 const json = @import("json.zig");
 const http = @import("http.zig");
 const async_mod = @import("async.zig");
+const numpy_mod = @import("numpy.zig");
 const builtins = @import("builtins.zig");
 const methods = @import("methods.zig");
 
 /// Dispatch call to appropriate handler based on function/method name
 /// Returns true if dispatched, false if should use fallback
 pub fn dispatchCall(self: *NativeCodegen, call: ast.Node.Call) CodegenError!bool {
-    // Check for module.function() calls (json.loads, http.get, etc.)
+    // PRIORITY 1: Check C library mappings first (zero overhead!)
     if (call.func.* == .attribute) {
         const attr = call.func.attribute;
         if (attr.value.* == .name) {
             const module_name = attr.value.name.id;
             const func_name = attr.attr;
+
+            // Build full function name (e.g., "numpy.sum")
+            var full_name_buf: [256]u8 = undefined;
+            const full_name = std.fmt.bufPrint(
+                &full_name_buf,
+                "{s}.{s}",
+                .{ module_name, func_name },
+            ) catch return false;
+
+            // Check if this maps to a C library function
+            // Skip numpy - use Agent 2's custom codegen instead (PRIORITY 2 below)
+            const is_numpy = std.mem.eql(u8, module_name, "numpy") or std.mem.eql(u8, module_name, "np");
+            if (!is_numpy) {
+                if (self.import_ctx) |ctx| {
+                    if (ctx.shouldMapFunction(full_name)) |mapping| {
+                        // Generate direct C library call
+                        try generateCLibraryCall(self, call, mapping);
+                        return true;
+                    }
+                }
+            }
+
+            // PRIORITY 2: Fallback to hardcoded handlers
 
             // JSON module functions
             if (std.mem.eql(u8, module_name, "json")) {
@@ -62,6 +86,42 @@ pub fn dispatchCall(self: *NativeCodegen, call: ast.Node.Call) CodegenError!bool
                 }
                 if (std.mem.eql(u8, func_name, "sleep")) {
                     try async_mod.genAsyncioSleep(self, call.args);
+                    return true;
+                }
+            }
+
+            // NumPy module functions
+            if (std.mem.eql(u8, module_name, "numpy") or std.mem.eql(u8, module_name, "np")) {
+                if (std.mem.eql(u8, func_name, "array")) {
+                    try numpy_mod.genArray(self, call.args);
+                    return true;
+                }
+                if (std.mem.eql(u8, func_name, "dot")) {
+                    try numpy_mod.genDot(self, call.args);
+                    return true;
+                }
+                if (std.mem.eql(u8, func_name, "sum")) {
+                    try numpy_mod.genSum(self, call.args);
+                    return true;
+                }
+                if (std.mem.eql(u8, func_name, "mean")) {
+                    try numpy_mod.genMean(self, call.args);
+                    return true;
+                }
+                if (std.mem.eql(u8, func_name, "transpose")) {
+                    try numpy_mod.genTranspose(self, call.args);
+                    return true;
+                }
+                if (std.mem.eql(u8, func_name, "matmul")) {
+                    try numpy_mod.genMatmul(self, call.args);
+                    return true;
+                }
+                if (std.mem.eql(u8, func_name, "zeros")) {
+                    try numpy_mod.genZeros(self, call.args);
+                    return true;
+                }
+                if (std.mem.eql(u8, func_name, "ones")) {
+                    try numpy_mod.genOnes(self, call.args);
                     return true;
                 }
             }
@@ -298,4 +358,65 @@ pub fn dispatchCall(self: *NativeCodegen, call: ast.Node.Call) CodegenError!bool
 
     // No dispatch handler found - use fallback
     return false;
+}
+
+/// Generate direct C library call (zero PyObject* overhead)
+fn generateCLibraryCall(
+    self: *NativeCodegen,
+    call: ast.Node.Call,
+    mapping: *const @import("c_interop").FunctionMapping,
+) CodegenError!void {
+    // Emit C function call
+    try self.output.appendSlice(self.allocator, "c.");
+    try self.output.appendSlice(self.allocator, mapping.c_name);
+    try self.output.appendSlice(self.allocator, "(");
+
+    // Generate arguments based on mapping
+    for (mapping.arg_mappings, 0..) |arg_map, i| {
+        if (i > 0) {
+            try self.output.appendSlice(self.allocator, ", ");
+        }
+
+        // Get Python argument
+        if (arg_map.python_index >= call.args.len) {
+            // Use default value if available
+            if (arg_map.default_value) |default| {
+                try self.output.appendSlice(self.allocator, default);
+                continue;
+            }
+            return error.OutOfMemory; // Missing required argument
+        }
+
+        const py_arg = call.args[arg_map.python_index];
+
+        // Apply conversion strategy
+        switch (arg_map.conversion) {
+            .direct => {
+                // Direct pass-through
+                const expressions = @import("expressions.zig");
+                try expressions.genExpr(self, py_arg);
+            },
+            .pass_pointer => |pp| {
+                // Pass pointer to data (e.g., array.ptr)
+                const expressions = @import("expressions.zig");
+                try expressions.genExpr(self, py_arg);
+                try self.output.appendSlice(self.allocator, pp.pointer_path);
+            },
+            .custom => |code| {
+                // Custom conversion code
+                try self.output.appendSlice(self.allocator, code);
+                try self.output.appendSlice(self.allocator, "(");
+                const expressions = @import("expressions.zig");
+                try expressions.genExpr(self, py_arg);
+                try self.output.appendSlice(self.allocator, ")");
+            },
+            else => {
+                // Unsupported conversion - fall back to direct
+                const expressions = @import("expressions.zig");
+                try expressions.genExpr(self, py_arg);
+            },
+        }
+    }
+
+    try self.output.appendSlice(self.allocator, ")");
 }

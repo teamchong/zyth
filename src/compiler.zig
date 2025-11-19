@@ -32,6 +32,9 @@ pub fn compileZig(allocator: std.mem.Allocator, zig_code: []const u8, output_pat
     try copyRuntimeDir(allocator, "runtime");
     try copyRuntimeDir(allocator, "pystring");
 
+    // Copy c_interop directory to .build
+    try copyCInteropDir(allocator);
+
     // Write Zig code to temporary file
     const tmp_path = try std.fmt.allocPrint(allocator, ".build/pyaot_main_{d}.zig", .{std.time.milliTimestamp()});
     defer allocator.free(tmp_path);
@@ -80,6 +83,18 @@ pub fn compileZig(allocator: std.mem.Allocator, zig_code: []const u8, output_pat
 
     try args.append(allocator, "-ODebug");
     try args.append(allocator, "-lc");
+
+    // Add BLAS linking for NumPy support
+    const builtin = @import("builtin");
+    if (builtin.os.tag == .macos) {
+        // macOS: Use Accelerate framework (built-in BLAS)
+        try args.append(allocator, "-framework");
+        try args.append(allocator, "Accelerate");
+    } else if (builtin.os.tag == .linux) {
+        // Linux: Link with OpenBLAS or system BLAS
+        try args.append(allocator, "-lopenblas");
+    }
+
     try args.append(allocator, output_flag);
 
     const argv = try args.toOwnedSlice(allocator);
@@ -131,6 +146,9 @@ pub fn compileZigSharedLib(allocator: std.mem.Allocator, zig_code: []const u8, o
     try copyRuntimeDir(allocator, "runtime");
     try copyRuntimeDir(allocator, "pystring");
 
+    // Copy c_interop directory to .build
+    try copyCInteropDir(allocator);
+
     // Write Zig code to temporary file
     const tmp_path = try std.fmt.allocPrint(allocator, ".build/pyaot_main_{d}.zig", .{std.time.milliTimestamp()});
     defer allocator.free(tmp_path);
@@ -175,6 +193,18 @@ pub fn compileZigSharedLib(allocator: std.mem.Allocator, zig_code: []const u8, o
     try args.append(allocator, "-ODebug");
     try args.append(allocator, "-dynamic");
     try args.append(allocator, "-lc");
+
+    // Add BLAS linking for NumPy support
+    const builtin = @import("builtin");
+    if (builtin.os.tag == .macos) {
+        // macOS: Use Accelerate framework (built-in BLAS)
+        try args.append(allocator, "-framework");
+        try args.append(allocator, "Accelerate");
+    } else if (builtin.os.tag == .linux) {
+        // Linux: Link with OpenBLAS or system BLAS
+        try args.append(allocator, "-lopenblas");
+    }
+
     try args.append(allocator, output_flag);
 
     const argv = try args.toOwnedSlice(allocator);
@@ -258,6 +288,46 @@ fn copyRuntimeDir(allocator: std.mem.Allocator, dir_name: []const u8) !void {
             const subdir_name = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir_name, entry.name });
             defer allocator.free(subdir_name);
             try copyRuntimeDir(allocator, subdir_name);
+        }
+    }
+}
+
+/// Copy c_interop directory to .build for C library interop
+fn copyCInteropDir(allocator: std.mem.Allocator) !void {
+    const src_dir_path = "packages/c_interop";
+    const dst_dir_path = ".build/c_interop";
+
+    // Create destination directory
+    std.fs.cwd().makeDir(dst_dir_path) catch |err| {
+        if (err != error.PathAlreadyExists) return err;
+    };
+
+    // Open source directory
+    var src_dir = std.fs.cwd().openDir(src_dir_path, .{ .iterate = true }) catch |err| {
+        // If directory doesn't exist, that's okay - just skip it
+        if (err == error.FileNotFound) return;
+        return err;
+    };
+    defer src_dir.close();
+
+    // Iterate through files in source directory
+    var iterator = src_dir.iterate();
+    while (try iterator.next()) |entry| {
+        if (entry.kind == .file) {
+            // Copy file
+            const src_file_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ src_dir_path, entry.name });
+            defer allocator.free(src_file_path);
+            const dst_file_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dst_dir_path, entry.name });
+            defer allocator.free(dst_file_path);
+
+            const src_file = try std.fs.cwd().openFile(src_file_path, .{});
+            defer src_file.close();
+            const dst_file = try std.fs.cwd().createFile(dst_file_path, .{});
+            defer dst_file.close();
+
+            const content = try src_file.readToEndAlloc(allocator, 10 * 1024 * 1024);
+            defer allocator.free(content);
+            try dst_file.writeAll(content);
         }
     }
 }

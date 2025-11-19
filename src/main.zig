@@ -7,6 +7,7 @@ const native_types = @import("analysis/native_types.zig");
 const semantic_types = @import("analysis/types.zig");
 const lifetime_analysis = @import("analysis/lifetime.zig");
 const native_codegen = @import("codegen/native/main.zig");
+const c_interop = @import("c_interop");
 
 const CompileOptions = struct {
     input_file: []const u8,
@@ -20,6 +21,10 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
+
+    // Initialize C library mapping registry
+    try c_interop.initGlobalRegistry(allocator);
+    defer c_interop.deinitGlobalRegistry(allocator);
 
     // Parse command line arguments
     const args = try std.process.argsAlloc(allocator);
@@ -176,6 +181,24 @@ fn compileModule(allocator: std.mem.Allocator, module_path: []const u8, module_n
     // TODO: Implement module compilation
 }
 
+/// Scan AST for import statements and register them with ImportContext
+fn detectImports(ctx: *c_interop.ImportContext, node: ast.Node) !void {
+    switch (node) {
+        .module => |m| {
+            for (m.body) |*stmt| {
+                try detectImports(ctx, stmt.*);
+            }
+        },
+        .import_stmt => |imp| {
+            try ctx.registerImport(imp.module, imp.asname);
+        },
+        .import_from => |imp| {
+            try ctx.registerImport(imp.module, null);
+        },
+        else => {},
+    }
+}
+
 fn compileFile(allocator: std.mem.Allocator, opts: CompileOptions) !void {
     // Read source file
     const source = try std.fs.cwd().readFileAlloc(allocator, opts.input_file, 10 * 1024 * 1024); // 10MB max
@@ -248,6 +271,11 @@ fn compileFile(allocator: std.mem.Allocator, opts: CompileOptions) !void {
         return error.InvalidAST;
     }
 
+    // PHASE 2.5: C Library Import Detection
+    var import_ctx = c_interop.ImportContext.init(allocator);
+    defer import_ctx.deinit();
+    try detectImports(&import_ctx, tree);
+
     // PHASE 3: Semantic Analysis - Analyze variable lifetimes and mutations
     var semantic_info = semantic_types.SemanticInfo.init(allocator);
     defer semantic_info.deinit();
@@ -264,6 +292,9 @@ fn compileFile(allocator: std.mem.Allocator, opts: CompileOptions) !void {
     std.debug.print("Generating native Zig code...\n", .{});
     var native_gen = try native_codegen.NativeCodegen.init(allocator, &type_inferrer, &semantic_info);
     defer native_gen.deinit();
+
+    // Pass import context to codegen
+    native_gen.setImportContext(&import_ctx);
 
     const zig_code = try native_gen.generate(tree.module);
     defer allocator.free(zig_code);

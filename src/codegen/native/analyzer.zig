@@ -170,6 +170,17 @@ fn analyzeExpr(node: ast.Node) !ModuleAnalysis {
                         analysis.needs_async = true;
                         analysis.needs_runtime = true;
                         analysis.needs_allocator = true;
+                    } else if (std.mem.eql(u8, module_name, "numpy") or std.mem.eql(u8, module_name, "np")) {
+                        // NumPy functions that need allocator: array, zeros, ones, transpose, matmul
+                        const func_name = attr.attr;
+                        if (std.mem.eql(u8, func_name, "array") or
+                            std.mem.eql(u8, func_name, "zeros") or
+                            std.mem.eql(u8, func_name, "ones") or
+                            std.mem.eql(u8, func_name, "transpose") or
+                            std.mem.eql(u8, func_name, "matmul"))
+                        {
+                            analysis.needs_allocator = true;
+                        }
                     }
                 }
             }

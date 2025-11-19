@@ -4,6 +4,13 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // C interop module
+    const c_interop_mod = b.createModule(.{
+        .root_source_file = b.path("packages/c_interop/src/registry.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // Main pyaot compiler executable
     const exe = b.addExecutable(.{
         .name = "pyaot",
@@ -13,6 +20,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    exe.root_module.addImport("c_interop", c_interop_mod);
 
     b.installArtifact(exe);
 
