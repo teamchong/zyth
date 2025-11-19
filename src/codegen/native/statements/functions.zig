@@ -2,6 +2,7 @@
 const std = @import("std");
 const ast = @import("../../../ast.zig");
 const NativeCodegen = @import("../main.zig").NativeCodegen;
+const DecoratedFunction = @import("../main.zig").DecoratedFunction;
 const CodegenError = @import("../main.zig").CodegenError;
 
 /// Check if function returns a lambda (closure)
@@ -51,6 +52,25 @@ fn isParameterCalled(body: []ast.Node, param_name: []const u8) bool {
     for (body) |stmt| {
         if (isParameterCalledInStmt(stmt, param_name)) return true;
     }
+    return false;
+}
+
+/// Check if a parameter is used as a function (called or returned) - for decorators
+fn isParameterUsedAsFunction(body: []ast.Node, param_name: []const u8) bool {
+    // Check if parameter is called
+    if (isParameterCalled(body, param_name)) return true;
+
+    // Check if parameter is returned (decorator pattern)
+    for (body) |stmt| {
+        if (stmt == .return_stmt) {
+            if (stmt.return_stmt.value) |val| {
+                if (val.* == .name and std.mem.eql(u8, val.name.id, param_name)) {
+                    return true;
+                }
+            }
+        }
+    }
+
     return false;
 }
 
@@ -132,23 +152,20 @@ pub fn genFunctionDef(self: *NativeCodegen, func: ast.Node.FunctionDef) CodegenE
         try self.emit(arg.name);
         try self.emit(": ");
 
-        // Try to get concrete type from type inference first
-        if (self.getVarType(arg.name)) |var_type| {
-            // Use inferred type if available
+        // Check if this parameter is used as a function (called or returned - decorator pattern)
+        // For decorators, use anytype to accept any function type
+        const is_func = isParameterUsedAsFunction(func.body, arg.name);
+        if (is_func) {
+            try self.emit("anytype"); // For decorators and higher-order functions
+        } else if (self.getVarType(arg.name)) |var_type| {
+            // Use inferred type if available and not a function parameter
             const zig_type = try self.nativeTypeToZigType(var_type);
             defer self.allocator.free(zig_type);
             try self.emit(zig_type);
         } else {
-            // Check if this parameter is used as a function (called in the body)
-            // If so, use anytype only if we don't have type info
-            const is_called = isParameterCalled(func.body, arg.name);
-            if (is_called) {
-                try self.emit("anytype"); // Fallback for unknown function types
-            } else {
-                // Convert Python type hint to Zig type
-                const zig_type = pythonTypeToZig(arg.type_annotation);
-                try self.emit(zig_type);
-            }
+            // Convert Python type hint to Zig type
+            const zig_type = pythonTypeToZig(arg.type_annotation);
+            try self.emit(zig_type);
         }
     }
 
@@ -156,7 +173,34 @@ pub fn genFunctionDef(self: *NativeCodegen, func: ast.Node.FunctionDef) CodegenE
 
     // Determine return type based on whether function has return statements
     if (hasReturnStatement(func.body)) {
-        try self.emit("i64 {\n"); // TODO: Support closure return types
+        // Check if this returns a parameter (decorator pattern)
+        var returned_param_name: ?[]const u8 = null;
+        for (func.body) |stmt| {
+            if (stmt == .return_stmt) {
+                if (stmt.return_stmt.value) |val| {
+                    if (val.* == .name) {
+                        // Check if returned value is a parameter that's anytype
+                        for (func.args) |arg| {
+                            if (std.mem.eql(u8, arg.name, val.name.id)) {
+                                if (isParameterUsedAsFunction(func.body, arg.name)) {
+                                    returned_param_name = arg.name;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (returned_param_name) |param_name| {
+            // Decorator pattern: return @TypeOf(param)
+            try self.emit("@TypeOf(");
+            try self.emit(param_name);
+            try self.emit(") {\n");
+        } else {
+            try self.emit("i64 {\n"); // Default return type
+        }
     } else {
         try self.emit("void {\n");
     }
@@ -181,6 +225,15 @@ pub fn genFunctionDef(self: *NativeCodegen, func: ast.Node.FunctionDef) CodegenE
 
     self.dedent();
     try self.emit("}\n");
+
+    // Register decorated functions for application in main()
+    if (func.decorators.len > 0) {
+        const decorated_func = DecoratedFunction{
+            .name = func.name,
+            .decorators = func.decorators,
+        };
+        try self.decorated_functions.append(self.allocator, decorated_func);
+    }
 }
 
 /// Generate class definition with __init__ constructor

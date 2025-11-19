@@ -25,6 +25,12 @@ pub const CodegenError = error{
     OutOfMemory,
 } || native_types.InferError;
 
+/// Tracks a function with decorators for later application
+pub const DecoratedFunction = struct {
+    name: []const u8,
+    decorators: []ast.Node,
+};
+
 pub const NativeCodegen = struct {
     allocator: std.mem.Allocator,
     output: std.ArrayList(u8),
@@ -69,6 +75,9 @@ pub const NativeCodegen = struct {
     // C library import context (for numpy, etc.)
     import_ctx: ?*const @import("c_interop").ImportContext,
 
+    // Track decorated functions for application in main()
+    decorated_functions: std.ArrayList(DecoratedFunction),
+
     pub fn init(allocator: std.mem.Allocator, type_inferrer: *TypeInferrer, semantic_info: *SemanticInfo) !*NativeCodegen {
         const self = try allocator.create(NativeCodegen);
         var scopes = std.ArrayList(std.StringHashMap(void)){};
@@ -96,6 +105,7 @@ pub const NativeCodegen = struct {
             .array_slice_vars = std.StringHashMap(void).init(allocator),
             .comptime_evaluator = comptime_eval.ComptimeEvaluator.init(allocator),
             .import_ctx = null,
+            .decorated_functions = std.ArrayList(DecoratedFunction){},
         };
         return self;
     }
@@ -153,6 +163,9 @@ pub const NativeCodegen = struct {
             self.allocator.free(key.*);
         }
         self.array_slice_vars.deinit();
+
+        // Clean up decorated functions tracking
+        self.decorated_functions.deinit(self.allocator);
 
         self.allocator.destroy(self);
     }
@@ -462,6 +475,24 @@ pub const NativeCodegen = struct {
             try self.emit("\n");
         }
 
+        // PHASE 6.5: Apply decorators (after allocator, before other code)
+        // This allows decorators to run after variables are defined but before main logic
+        if (self.decorated_functions.items.len > 0) {
+            try self.emitIndent();
+            try self.emit("// Apply decorators\n");
+            for (self.decorated_functions.items) |decorated_func| {
+                for (decorated_func.decorators) |decorator| {
+                    try self.emitIndent();
+                    try self.emit("_ = ");
+                    try self.genExpr(decorator);
+                    try self.emit("(&");
+                    try self.emit(decorated_func.name);
+                    try self.emit(");\n");
+                }
+            }
+            try self.emit("\n");
+        }
+
         // PHASE 7: Generate statements (skip class/function defs and imports - already handled)
         // This will populate self.lambda_functions
         for (module.body) |stmt| {
@@ -583,5 +614,38 @@ pub const NativeCodegen = struct {
     /// Get the inferred type of a variable from type inference
     pub fn getVarType(self: *NativeCodegen, var_name: []const u8) ?NativeType {
         return self.type_inferrer.var_types.get(var_name);
+    }
+
+    /// Check if a class has a specific method (e.g., __getitem__, __len__)
+    /// Used for magic method dispatch
+    pub fn classHasMethod(self: *NativeCodegen, class_name: []const u8, method_name: []const u8) bool {
+        // Look up class definition in the classes registry
+        const class_def = self.classes.get(class_name) orelse return false;
+
+        // Search for method in class body
+        for (class_def.body) |stmt| {
+            if (stmt == .function_def) {
+                if (std.mem.eql(u8, stmt.function_def.name, method_name)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// Get the class name from a variable's type
+    /// Returns null if the variable is not an instance of a custom class
+    fn getVarClassName(self: *NativeCodegen, expr: ast.Node) ?[]const u8 {
+        // For name nodes, check if the variable was assigned from a class instantiation
+        if (expr == .name) {
+            // Try to track back to the class constructor call
+            // For simplicity, look for pattern: var_name = ClassName()
+            // This is a simplified heuristic - full implementation would need
+            // full def-use chain analysis
+            _ = self;
+            return null; // Simplified for now
+        }
+        return null;
     }
 };

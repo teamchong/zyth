@@ -56,6 +56,90 @@ pub fn genWhile(self: *NativeCodegen, while_stmt: ast.Node.While) CodegenError!v
     try self.output.appendSlice(self.allocator, "}\n");
 }
 
+/// Generate tuple unpacking loop
+/// Transforms: for x, y in iterable_of_tuples into:
+/// for (iterable.items) |__tuple__| {
+///     const x = __tuple__[0];
+///     const y = __tuple__[1];
+///     // body
+/// }
+fn genTupleUnpackLoop(self: *NativeCodegen, target: ast.Node, iter: ast.Node, body: []ast.Node) CodegenError!void {
+    // Validate target is a list (parser uses list node for tuple unpacking)
+    if (target != .list) {
+        @panic("Tuple unpacking requires list target");
+    }
+    const target_elts = target.list.elts;
+    if (target_elts.len == 0) {
+        @panic("Tuple unpacking requires at least one variable");
+    }
+
+    // Extract variable names
+    var var_names = try self.allocator.alloc([]const u8, target_elts.len);
+    defer self.allocator.free(var_names);
+    for (target_elts, 0..) |elt, i| {
+        if (elt != .name) {
+            @panic("Tuple unpacking target must be names");
+        }
+        var_names[i] = elt.name.id;
+    }
+
+    // Generate for loop over iterable
+    try self.emitIndent();
+    try self.output.appendSlice(self.allocator, "for (");
+
+    // Check if we need to add .items for ArrayList
+    const iter_type = try self.type_inferrer.inferExpr(iter);
+
+    // Check if this is a method call like dict.items()
+    const is_method_call = iter == .call and iter.call.func.* == .attribute;
+
+    // If iterating over list (including method calls that return lists), add .items
+    if (iter_type == .list) {
+        if (is_method_call) {
+            // Method call returns ArrayList - wrap in parens for .items
+            try self.output.appendSlice(self.allocator, "(");
+            try self.genExpr(iter);
+            try self.output.appendSlice(self.allocator, ").items");
+        } else if (iter == .list) {
+            // Inline list literal
+            try self.output.appendSlice(self.allocator, "(");
+            try self.genExpr(iter);
+            try self.output.appendSlice(self.allocator, ").items");
+        } else {
+            // Variable that holds ArrayList
+            try self.genExpr(iter);
+            try self.output.appendSlice(self.allocator, ".items");
+        }
+    } else {
+        // Not a list type - iterate directly
+        try self.genExpr(iter);
+    }
+
+    // Use unique temp variable for tuple
+    const unique_id = self.output.items.len;
+    try self.output.writer(self.allocator).print(") |__tuple_{d}__| {{\n", .{unique_id});
+
+    self.indent();
+    try self.pushScope();
+
+    // Unpack tuple elements: const x = __tuple__[0]; const y = __tuple__[1];
+    for (var_names, 0..) |var_name, i| {
+        try self.emitIndent();
+        try self.output.writer(self.allocator).print("const {s} = __tuple_{d}__[{d}];\n", .{ var_name, unique_id, i });
+    }
+
+    // Generate body statements
+    for (body) |stmt| {
+        try self.generateStmt(stmt);
+    }
+
+    self.popScope();
+    self.dedent();
+
+    try self.emitIndent();
+    try self.output.appendSlice(self.allocator, "}\n");
+}
+
 /// Generate for loop
 pub fn genFor(self: *NativeCodegen, for_stmt: ast.Node.For) CodegenError!void {
     // Check if iterating over a function call (range, enumerate, etc.)
@@ -82,6 +166,12 @@ pub fn genFor(self: *NativeCodegen, for_stmt: ast.Node.For) CodegenError!void {
             try genZipLoop(self, for_stmt.target.*, for_stmt.iter.call.args, for_stmt.body);
             return;
         }
+    }
+
+    // Check if target is tuple unpacking (e.g., for k, v in dict.items())
+    if (for_stmt.target.* == .list) {
+        try genTupleUnpackLoop(self, for_stmt.target.*, for_stmt.iter.*, for_stmt.body);
+        return;
     }
 
     // Regular iteration over collection - requires single target variable
@@ -165,6 +255,11 @@ pub fn genFor(self: *NativeCodegen, for_stmt: ast.Node.For) CodegenError!void {
         try self.genExpr(for_stmt.iter.*);
     } else if (iter_type == .list and for_stmt.iter.* == .list) {
         // Inline ArrayList literal - wrap in parens for .items access
+        try self.output.appendSlice(self.allocator, "(");
+        try self.genExpr(for_stmt.iter.*);
+        try self.output.appendSlice(self.allocator, ").items");
+    } else if (iter_type == .list and for_stmt.iter.* == .call and for_stmt.iter.call.func.* == .attribute) {
+        // Method call that returns ArrayList - wrap in parens for .items access
         try self.output.appendSlice(self.allocator, "(");
         try self.genExpr(for_stmt.iter.*);
         try self.output.appendSlice(self.allocator, ").items");

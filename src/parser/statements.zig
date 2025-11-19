@@ -115,6 +115,13 @@ pub fn parseExprOrAssign(self: *Parser) ParseError!ast.Node {
     }
 
 pub fn parseFunctionDef(self: *Parser) ParseError!ast.Node {
+        // Parse decorators first (if any)
+        var decorators = std.ArrayList(ast.Node){};
+        defer decorators.deinit(self.allocator);
+
+        // Note: Decorators should be parsed by the caller before calling this function
+        // This function only handles the actual function definition
+
         // Check for 'async' keyword
         const is_async = self.match(.Async);
 
@@ -184,6 +191,7 @@ pub fn parseFunctionDef(self: *Parser) ParseError!ast.Node {
                 .args = try args.toOwnedSlice(self.allocator),
                 .body = body,
                 .is_async = is_async,
+                .decorators = &[_]ast.Node{}, // Empty decorators for now
             },
         };
     }
@@ -574,7 +582,6 @@ pub fn parseImportFrom(self: *Parser) ParseError!ast.Node {
     pub fn parseDecorated(self: *Parser) ParseError!ast.Node {
         // Parse decorators: @decorator_name or @decorator_func(args)
         var decorators = std.ArrayList(ast.Node){};
-        defer decorators.deinit(self.allocator);
 
         while (self.match(.At)) {
             // Parse decorator expression (name or call)
@@ -584,14 +591,17 @@ pub fn parseImportFrom(self: *Parser) ParseError!ast.Node {
         }
 
         // Parse the decorated function/class
-        const decorated_node = try self.parseStatement();
+        var decorated_node = try self.parseStatement();
 
-        // Transform: @dec def f(): ... => f = dec(f)
-        // For simplicity, we'll just return the function and handle decoration in codegen
-        // Store decorators as assignments after the function
+        // Attach decorators to function definition
+        if (decorated_node == .function_def) {
+            const decorators_slice = try decorators.toOwnedSlice(self.allocator);
+            decorated_node.function_def.decorators = decorators_slice;
+        } else {
+            // If not a function, just free the decorators
+            decorators.deinit(self.allocator);
+        }
 
-        // For now, just return the function definition
-        // TODO: Apply decorators by generating wrapper assignments
         return decorated_node;
     }
 

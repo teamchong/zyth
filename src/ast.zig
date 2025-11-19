@@ -97,6 +97,7 @@ pub const Node = union(enum) {
         args: []Arg,
         body: []Node,
         is_async: bool,
+        decorators: []Node,
     };
 
     pub const Lambda = struct {
@@ -290,6 +291,8 @@ pub const Node = union(enum) {
                 allocator.free(f.args);
                 for (f.body) |*n| n.deinit(allocator);
                 allocator.free(f.body);
+                for (f.decorators) |*d| d.deinit(allocator);
+                allocator.free(f.decorators);
             },
             .lambda => |l| {
                 allocator.free(l.args);

@@ -51,6 +51,32 @@ pub fn genSliceIndex(self: *NativeCodegen, node: ast.Node, in_slice_context: boo
 pub fn genSubscript(self: *NativeCodegen, subscript: ast.Node.Subscript) CodegenError!void {
     switch (subscript.slice) {
         .index => {
+            // Check if the object has __getitem__ magic method (custom class support)
+            // For now, use heuristic: check if value is a name that matches a class name
+            const has_magic_method = blk: {
+                if (subscript.value.* == .name) {
+                    // Check all registered classes to see if any have __getitem__
+                    var class_iter = self.classes.iterator();
+                    while (class_iter.next()) |entry| {
+                        if (self.classHasMethod(entry.key_ptr.*, "__getitem__")) {
+                            // Found a class with __getitem__ - we'll generate the call
+                            // Note: This is a heuristic - ideally we'd track exact types
+                            break :blk true;
+                        }
+                    }
+                }
+                break :blk false;
+            };
+
+            // If we found a __getitem__ method, generate method call instead of direct subscript
+            if (has_magic_method and subscript.value.* == .name) {
+                try genExpr(self, subscript.value.*);
+                try self.output.appendSlice(self.allocator, ".__getitem__(");
+                try genExpr(self, subscript.slice.index.*);
+                try self.output.appendSlice(self.allocator, ")");
+                return;
+            }
+
             // Check if this is a dict, list, or dataframe subscript
             const value_type = try self.type_inferrer.inferExpr(subscript.value.*);
             const is_dict = (value_type == .dict);

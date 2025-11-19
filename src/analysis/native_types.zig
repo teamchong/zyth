@@ -301,7 +301,11 @@ pub const TypeInferrer = struct {
                                 if (arg == .name) {
                                         // Get type from variable
                                     const list_type = self.var_types.get(arg.name.id) orelse .unknown;
-                                    const elem_type = if (list_type == .list) list_type.list.* else .unknown;
+                                    const elem_type = switch (list_type) {
+                                        .list => |l| l.*,
+                                        .array => |a| a.element_type.*,
+                                        else => .unknown,
+                                    };
                                     try self.var_types.put(targets[1].name.id, elem_type);
                                 } else if (arg == .list and arg.list.elts.len > 0) {
                                     // Infer from first list element
@@ -318,8 +322,30 @@ pub const TypeInferrer = struct {
                                 if (i < targets.len and targets[i] == .name) {
                                     if (arg == .name) {
                                         const list_type = self.var_types.get(arg.name.id) orelse .unknown;
-                                        const elem_type = if (list_type == .list) list_type.list.* else .unknown;
+                                        const elem_type = switch (list_type) {
+                                            .list => |l| l.*,
+                                            .array => |a| a.element_type.*,
+                                            else => .unknown,
+                                        };
                                         try self.var_types.put(targets[i].name.id, elem_type);
+                                    }
+                                }
+                            }
+                        }
+                    } else if (for_stmt.iter.* == .call and for_stmt.iter.call.func.* == .attribute) {
+                        // Generic tuple unpacking from method calls like dict.items()
+                        // for k, v in dict.items(): ...
+                        const iter_type = self.inferExpr(for_stmt.iter.*) catch .unknown;
+
+                        // If method returns a list of tuples, unpack the tuple element types
+                        if (iter_type == .list) {
+                            const elem_type = iter_type.list.*;
+                            if (elem_type == .tuple) {
+                                // Unpack tuple element types to target variables
+                                const tuple_types = elem_type.tuple;
+                                for (targets, 0..) |target, i| {
+                                    if (target == .name and i < tuple_types.len) {
+                                        try self.var_types.put(target.name.id, tuple_types[i]);
                                     }
                                 }
                             }
@@ -329,7 +355,11 @@ pub const TypeInferrer = struct {
                     // Single loop var: for item in items
                     if (for_stmt.iter.* == .name) {
                         const iter_type = self.var_types.get(for_stmt.iter.name.id) orelse .unknown;
-                        const elem_type = if (iter_type == .list) iter_type.list.* else .unknown;
+                        const elem_type = switch (iter_type) {
+                            .list => |l| l.*,
+                            .array => |a| a.element_type.*,
+                            else => .unknown,
+                        };
                         try self.var_types.put(for_stmt.target.name.id, elem_type);
                     }
                 }

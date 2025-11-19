@@ -12,6 +12,27 @@ pub fn genLen(self: *NativeCodegen, args: []ast.Node) CodegenError!void {
         return;
     }
 
+    // Check if the object has __len__ magic method (custom class support)
+    const has_magic_method = blk: {
+        if (args[0] == .name) {
+            // Check all registered classes to see if any have __len__
+            var class_iter = self.classes.iterator();
+            while (class_iter.next()) |entry| {
+                if (self.classHasMethod(entry.key_ptr.*, "__len__")) {
+                    break :blk true;
+                }
+            }
+        }
+        break :blk false;
+    };
+
+    // If we found a __len__ method, generate method call
+    if (has_magic_method and args[0] == .name) {
+        try self.genExpr(args[0]);
+        try self.output.appendSlice(self.allocator, ".__len__()");
+        return;
+    }
+
     // Check if argument is ArrayList (detected as .list type), dict, or tuple
     const arg_type = self.type_inferrer.inferExpr(args[0]) catch .unknown;
 
