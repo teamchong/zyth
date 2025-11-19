@@ -1,7 +1,6 @@
 """
 Simple import test - demonstrates basic import support
 """
-import pytest
 
 
 def test_basic():

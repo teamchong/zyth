@@ -7,6 +7,7 @@ const CodegenError = @import("../../main.zig").CodegenError;
 const CodeBuilder = @import("../../code_builder.zig").CodeBuilder;
 const self_analyzer = @import("self_analyzer.zig");
 const param_analyzer = @import("param_analyzer.zig");
+const allocator_analyzer = @import("allocator_analyzer.zig");
 
 /// Check if function returns a lambda (closure)
 fn returnsLambda(body: []ast.Node) bool {
@@ -64,10 +65,29 @@ fn pythonTypeToZig(type_hint: ?[]const u8) []const u8 {
 
 /// Generate function definition
 pub fn genFunctionDef(self: *NativeCodegen, func: ast.Node.FunctionDef) CodegenError!void {
+    // Check if function needs allocator parameter
+    const needs_allocator = allocator_analyzer.functionNeedsAllocator(func);
+
+    // Track this function if it needs allocator (for call site generation)
+    if (needs_allocator) {
+        const func_name_copy = try self.allocator.dupe(u8, func.name);
+        try self.functions_needing_allocator.put(func_name_copy, {});
+    }
+
     // Generate function signature: fn name(param: type, ...) return_type {
     try self.emit("fn ");
     try self.emit(func.name);
     try self.emit("(");
+
+    // Add allocator as first parameter if needed
+    var param_offset: usize = 0;
+    if (needs_allocator) {
+        try self.emit("allocator: std.mem.Allocator");
+        param_offset = 1;
+        if (func.args.len > 0) {
+            try self.emit(", ");
+        }
+    }
 
     // Generate parameters
     for (func.args, 0..) |arg, i| {
@@ -107,6 +127,10 @@ pub fn genFunctionDef(self: *NativeCodegen, func: ast.Node.FunctionDef) CodegenE
     if (func.return_type) |_| {
         // Use explicit return type annotation if provided
         const zig_return_type = pythonTypeToZig(func.return_type);
+        // Add error union if function needs allocator (allocations can fail)
+        if (needs_allocator) {
+            try self.emit("!");
+        }
         try self.emit(zig_return_type);
         try self.emit(" {\n");
     } else if (hasReturnStatement(func.body)) {
@@ -136,10 +160,19 @@ pub fn genFunctionDef(self: *NativeCodegen, func: ast.Node.FunctionDef) CodegenE
             try self.emit(param_name);
             try self.emit(") {\n");
         } else {
+            // Add error union if function needs allocator
+            if (needs_allocator) {
+                try self.emit("!");
+            }
             try self.emit("i64 {\n"); // Default return type
         }
     } else {
-        try self.emit("void {\n");
+        // Functions with allocator but no return still need error union for void
+        if (needs_allocator) {
+            try self.emit("!void {\n");
+        } else {
+            try self.emit("void {\n");
+        }
     }
 
     self.indent();

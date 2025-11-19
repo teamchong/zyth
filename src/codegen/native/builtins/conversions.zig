@@ -33,28 +33,9 @@ pub fn genLen(self: *NativeCodegen, args: []ast.Node) CodegenError!void {
         return;
     }
 
-    // Check if argument is ArrayList (detected as .list type), dict, or tuple
+    // Check if argument is dict or tuple
     const arg_type = self.type_inferrer.inferExpr(args[0]) catch .unknown;
 
-    // Check if this is an array slice (subscript of constant array OR variable holding slice)
-    const is_array_slice = blk: {
-        // Check if it's directly a subscript of constant array
-        if (args[0] == .subscript and args[0].subscript.slice == .slice) {
-            if (args[0].subscript.value.* == .name) {
-                break :blk self.isArrayVar(args[0].subscript.value.name.id);
-            }
-        }
-        // Check if it's a variable that holds an array slice
-        if (args[0] == .name) {
-            break :blk self.isArraySliceVar(args[0].name.id);
-        }
-        break :blk false;
-    };
-
-    const is_arraylist = switch (arg_type) {
-        .list => !is_array_slice, // ArrayList only if not an array slice
-        else => false,
-    };
     const is_dict = switch (arg_type) {
         .dict => true,
         else => false,
@@ -73,13 +54,27 @@ pub fn genLen(self: *NativeCodegen, args: []ast.Node) CodegenError!void {
         try self.output.appendSlice(self.allocator, "@typeInfo(@TypeOf(");
         try self.genExpr(args[0]);
         try self.output.appendSlice(self.allocator, ")).@\"struct\".fields.len");
-    } else {
+    } else if (is_dict) {
         try self.genExpr(args[0]);
+        try self.output.appendSlice(self.allocator, ".count()");
+    } else {
+        // Check if this is a tracked ArrayList variable
+        const is_arraylist = blk: {
+            if (args[0] == .name) {
+                const var_name = args[0].name.id;
+                if (self.isArrayListVar(var_name)) {
+                    break :blk true;
+                }
+            }
+            break :blk false;
+        };
+
         if (is_arraylist) {
+            try self.genExpr(args[0]);
             try self.output.appendSlice(self.allocator, ".items.len");
-        } else if (is_dict) {
-            try self.output.appendSlice(self.allocator, ".count()");
         } else {
+            // For arrays, slices, strings - just use .len
+            try self.genExpr(args[0]);
             try self.output.appendSlice(self.allocator, ".len");
         }
     }

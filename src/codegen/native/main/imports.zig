@@ -6,12 +6,26 @@ const NativeCodegen = core.NativeCodegen;
 const statements = @import("../statements.zig");
 const import_resolver = @import("../../../import_resolver.zig");
 
+/// Infer return type from type string
+fn inferReturnTypeFromString(
+    type_name: []const u8,
+) @import("../../../analysis/native_types.zig").NativeType {
+    if (std.mem.eql(u8, type_name, "int")) return .int;
+    if (std.mem.eql(u8, type_name, "float")) return .float;
+    if (std.mem.eql(u8, type_name, "str")) return .{ .string = .runtime };
+    if (std.mem.eql(u8, type_name, "bool")) return .bool;
+
+    return .int;
+}
+
 /// Compile a Python module to a Zig module file
 /// Returns error if module .py file cannot be found
+/// Accepts optional type_inferrer to register module function return types
 pub fn compileModuleToZig(
     module_name: []const u8,
     source_file_dir: ?[]const u8,
     allocator: std.mem.Allocator,
+    main_type_inferrer: ?*@import("../../../analysis/native_types.zig").TypeInferrer,
 ) !void {
     // Use import resolver to find the .py file
     const py_path = try import_resolver.resolveImport(module_name, source_file_dir, allocator) orelse {
@@ -102,18 +116,59 @@ pub fn compileModuleToZig(
                 if (func.args.len > 0) try codegen.emit(", ");
                 try codegen.emit("allocator: std.mem.Allocator");
 
-                try codegen.emit(") ");
+                try codegen.emit(") !"); // Add ! for error return
 
-                // Return type - default to i64
-                try codegen.emit("i64");
+                // Infer return type from function
+                const return_type = if (func.return_type) |ret_type_name|
+                    inferReturnTypeFromString(ret_type_name)
+                else
+                    native_types_mod.NativeType.int;
+
+                // Register module function return type in main type inferrer
+                if (main_type_inferrer) |type_inf| {
+                    // Format: "module.function" -> return type
+                    const qualified_name = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ module_name, func.name });
+                    try type_inf.func_return_types.put(qualified_name, return_type);
+                    // Note: qualified_name is kept allocated for the lifetime of the map
+                }
+
+                const return_type_str = switch (return_type) {
+                    .int => "i64",
+                    .float => "f64",
+                    .bool => "bool",
+                    .string => "[]const u8",
+                    else => "i64",
+                };
+                try codegen.emit(return_type_str);
                 try codegen.emit(" {\n");
 
                 codegen.indent();
 
-                // Generate function body using full codegen
+                // Generate function body in a temporary buffer first
+                const saved_output = codegen.output;
+                codegen.output = std.ArrayList(u8){};
+
                 for (func.body) |body_stmt| {
                     try codegen.generateStmt(body_stmt);
                 }
+
+                const body_code = try codegen.output.toOwnedSlice(allocator);
+                defer allocator.free(body_code);
+
+                // Restore original output
+                codegen.output = saved_output;
+
+                // Check if "allocator" was used in the generated body
+                const allocator_used = std.mem.indexOf(u8, body_code, "allocator") != null;
+
+                // If allocator not used, add suppression at start
+                if (!allocator_used) {
+                    try codegen.emitIndent();
+                    try codegen.emit("std.mem.doNotOptimizeAway(&allocator);\n");
+                }
+
+                // Emit the actual body
+                try codegen.output.appendSlice(allocator, body_code);
 
                 codegen.dedent();
                 try codegen.emit("}\n\n");
@@ -126,6 +181,11 @@ pub fn compileModuleToZig(
 
     const zig_code = try codegen.output.toOwnedSlice(allocator);
     defer allocator.free(zig_code);
+
+    // Create .build directory if it doesn't exist
+    std.fs.cwd().makeDir(".build") catch |err| {
+        if (err != error.PathAlreadyExists) return err;
+    };
 
     // Write to .build/module_name.zig
     const zig_path = try std.fmt.allocPrint(allocator, ".build/{s}.zig", .{module_name});

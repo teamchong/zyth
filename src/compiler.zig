@@ -44,6 +44,33 @@ pub fn compileZig(allocator: std.mem.Allocator, zig_code: []const u8, output_pat
     // Copy c_interop directory to build dir
     try copyCInteropDir(allocator, build_dir);
 
+    // Copy any compiled modules from .build/ to per-process build dir
+    if (std.fs.cwd().openDir(".build", .{ .iterate = true })) |build_iter_dir| {
+        var mut_dir = build_iter_dir;
+        defer mut_dir.close();
+        var walker = mut_dir.iterate();
+        while (try walker.next()) |entry| {
+            if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".zig")) {
+                const src_path = try std.fmt.allocPrint(allocator, ".build/{s}", .{entry.name});
+                defer allocator.free(src_path);
+                const dst_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ build_dir, entry.name });
+                defer allocator.free(dst_path);
+
+                const src = std.fs.cwd().openFile(src_path, .{}) catch continue;
+                defer src.close();
+                const dst = try std.fs.cwd().createFile(dst_path, .{});
+                defer dst.close();
+
+                const mod_content = try src.readToEndAlloc(allocator, 1024 * 1024);
+                defer allocator.free(mod_content);
+                try dst.writeAll(mod_content);
+            }
+        }
+    } else |err| {
+        // If .build doesn't exist, that's fine - no modules to copy
+        if (err != error.FileNotFound) return err;
+    }
+
     // Write Zig code to temporary file
     const tmp_path = try std.fmt.allocPrint(allocator, "{s}/pyaot_main_{d}.zig", .{ build_dir, std.time.milliTimestamp() });
     defer allocator.free(tmp_path);
@@ -162,6 +189,33 @@ pub fn compileZigSharedLib(allocator: std.mem.Allocator, zig_code: []const u8, o
 
     // Copy c_interop directory to build dir
     try copyCInteropDir(allocator, build_dir);
+
+    // Copy any compiled modules from .build/ to per-process build dir
+    if (std.fs.cwd().openDir(".build", .{ .iterate = true })) |build_iter_dir| {
+        var mut_dir = build_iter_dir;
+        defer mut_dir.close();
+        var walker = mut_dir.iterate();
+        while (try walker.next()) |entry| {
+            if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".zig")) {
+                const src_path = try std.fmt.allocPrint(allocator, ".build/{s}", .{entry.name});
+                defer allocator.free(src_path);
+                const dst_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ build_dir, entry.name });
+                defer allocator.free(dst_path);
+
+                const src = std.fs.cwd().openFile(src_path, .{}) catch continue;
+                defer src.close();
+                const dst = try std.fs.cwd().createFile(dst_path, .{});
+                defer dst.close();
+
+                const mod_content = try src.readToEndAlloc(allocator, 1024 * 1024);
+                defer allocator.free(mod_content);
+                try dst.writeAll(mod_content);
+            }
+        }
+    } else |err| {
+        // If .build doesn't exist, that's fine - no modules to copy
+        if (err != error.FileNotFound) return err;
+    }
 
     // Write Zig code to temporary file
     const tmp_path = try std.fmt.allocPrint(allocator, "{s}/pyaot_main_{d}.zig", .{ build_dir, std.time.milliTimestamp() });

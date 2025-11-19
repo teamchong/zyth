@@ -284,6 +284,7 @@ fn inferCall(
 
         // Built-in type conversion functions
 
+        if (std.mem.eql(u8, func_name, "len")) return .int; // len() returns int
         if (std.mem.eql(u8, func_name, "str")) return .{ .string = .runtime }; // str() produces runtime string
         if (std.mem.eql(u8, func_name, "int")) return .int;
         if (std.mem.eql(u8, func_name, "float")) return .float;
@@ -299,17 +300,39 @@ fn inferCall(
         if (std.mem.eql(u8, func_name, "round")) return .int;
         if (std.mem.eql(u8, func_name, "chr")) return .{ .string = .runtime }; // chr() produces runtime string
         if (std.mem.eql(u8, func_name, "ord")) return .int;
+        if (std.mem.eql(u8, func_name, "min")) return .int; // min() returns int
+        if (std.mem.eql(u8, func_name, "max")) return .int; // max() returns int
+        if (std.mem.eql(u8, func_name, "sum")) return .int; // sum() returns int
     }
 
     // Check if this is a method call (attribute access)
     if (call.func.* == .attribute) {
         const attr = call.func.attribute;
 
-        // Check for pandas.DataFrame() or pd.DataFrame()
+        // Check for module function calls (module.function)
         if (attr.value.* == .name) {
             const module_name = attr.value.name.id;
+            const func_name = attr.attr;
+
+            // Try to look up module.function in func_return_types
+            // Format: "module.function" -> return type
+            var buf: [256]u8 = undefined;
+            const qualified_name = std.fmt.bufPrint(&buf, "{s}.{s}", .{ module_name, func_name }) catch &[_]u8{};
+            if (qualified_name.len > 0) {
+                if (func_return_types.get(qualified_name)) |return_type| {
+                    return return_type;
+                }
+            }
+
+            // json.loads() returns PyObject (dict)
+            // Type is unknown at compile time, will use formatPyObject at runtime
+            if (std.mem.eql(u8, module_name, "json") and std.mem.eql(u8, func_name, "loads")) {
+                return .unknown;
+            }
+
+            // pandas.DataFrame() or pd.DataFrame()
             if ((std.mem.eql(u8, module_name, "pandas") or std.mem.eql(u8, module_name, "pd")) and
-                std.mem.eql(u8, attr.attr, "DataFrame")) {
+                std.mem.eql(u8, func_name, "DataFrame")) {
                 return .dataframe;
             }
 

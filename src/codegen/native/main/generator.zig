@@ -27,8 +27,11 @@ pub fn generate(self: *NativeCodegen, module: ast.Node.Module) ![]const u8 {
     defer imported_modules.deinit(self.allocator);
 
     // Compile each imported module to .zig file
+    // Pass type_inferrer so module function return types are registered
     for (imported_modules.items) |mod_name| {
-        try imports.compileModuleToZig(mod_name, source_file_dir, self.allocator);
+        imports.compileModuleToZig(mod_name, source_file_dir, self.allocator, self.type_inferrer) catch {
+            // Module compilation failed - likely external package, skip it
+        };
     }
 
     // PHASE 2: Register all classes for inheritance support
@@ -37,6 +40,18 @@ pub fn generate(self: *NativeCodegen, module: ast.Node.Module) ![]const u8 {
             try self.class_registry.registerClass(stmt.class_def.name, stmt.class_def);
         }
     }
+
+    // PHASE 2.5: Analyze mutations for list ArrayList vs fixed array decision
+    const mutation_analyzer = @import("../../../analysis/native_types/mutation_analyzer.zig");
+    var mutations = try mutation_analyzer.analyzeMutations(module, self.allocator);
+    defer {
+        var iter = mutations.valueIterator();
+        while (iter.next()) |info| {
+            @constCast(info).mutation_types.deinit(self.allocator);
+        }
+        mutations.deinit();
+    }
+    self.mutation_info = &mutations;
 
     // PHASE 3: Generate imports based on analysis
     try self.emit("const std = @import(\"std\");\n");
@@ -57,6 +72,10 @@ pub fn generate(self: *NativeCodegen, module: ast.Node.Module) ![]const u8 {
 
     // Add user module imports using registry
     for (imported_modules.items) |mod_name| {
+        // Track this module name for call site handling
+        const mod_copy = try self.allocator.dupe(u8, mod_name);
+        try self.imported_modules.put(mod_copy, {});
+
         try self.emit("const ");
         try self.emit(mod_name);
         try self.emit(" = ");
@@ -124,6 +143,18 @@ pub fn generate(self: *NativeCodegen, module: ast.Node.Module) ![]const u8 {
             // Track if this symbol needs allocator (runtime module functions)
             if (is_runtime_module) {
                 try self.from_import_needs_allocator.put(symbol_name, {});
+
+                // For json.loads, generate a wrapper function that accepts string literals
+                if (std.mem.eql(u8, from_imp.module, "json") and std.mem.eql(u8, name, "loads")) {
+                    try self.emit("fn ");
+                    try self.emit(symbol_name);
+                    try self.emit("(json_str: []const u8, allocator: std.mem.Allocator) !*runtime.PyObject {\n");
+                    try self.emit("    const json_str_obj = try runtime.PyString.create(allocator, json_str);\n");
+                    try self.emit("    defer runtime.decref(json_str_obj, allocator);\n");
+                    try self.emit("    return try runtime.json.loads(json_str_obj, allocator);\n");
+                    try self.emit("}\n");
+                    continue; // Skip const generation for this one
+                }
             }
 
             // Generate: const symbol_name = module.name;

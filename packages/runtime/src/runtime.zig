@@ -308,6 +308,41 @@ pub fn formatPyObject(obj: *PyObject, allocator: std.mem.Allocator) ![]const u8 
             const bool_data: *PyBool = @ptrCast(@alignCast(obj.data));
             break :blk if (bool_data.value) "True" else "False";
         },
+        .dict => blk: {
+            const dict_data: *PyDict = @ptrCast(@alignCast(obj.data));
+            var buf = std.ArrayList(u8){};
+            try buf.appendSlice(allocator, "{");
+
+            var it = dict_data.map.iterator();
+            var first = true;
+            while (it.next()) |entry| {
+                if (!first) {
+                    try buf.appendSlice(allocator, ", ");
+                }
+                // Format as Python dict: {'key': value}
+                try buf.writer(allocator).print("'{s}': ", .{entry.key_ptr.*});
+
+                // Format value based on type
+                const val_obj = entry.value_ptr.*;
+                switch (val_obj.type_id) {
+                    .string => {
+                        const val_str: *PyString = @ptrCast(@alignCast(val_obj.data));
+                        try buf.writer(allocator).print("'{s}'", .{val_str.data});
+                    },
+                    .int => {
+                        const val_int: *PyInt = @ptrCast(@alignCast(val_obj.data));
+                        try buf.writer(allocator).print("{d}", .{val_int.value});
+                    },
+                    else => {
+                        try buf.appendSlice(allocator, "<object>");
+                    },
+                }
+                first = false;
+            }
+
+            try buf.appendSlice(allocator, "}");
+            break :blk try buf.toOwnedSlice(allocator);
+        },
         else => "<object>",
     };
 }

@@ -16,6 +16,19 @@ pub fn genCall(self: *NativeCodegen, call: ast.Node.Call) CodegenError!void {
     const dispatched = try dispatch.dispatchCall(self, call);
     if (dispatched) return;
 
+    // Handle from-imported json.loads: from json import loads -> loads()
+    // The generated wrapper function takes []const u8, not PyObject
+    if (call.func.* == .name) {
+        const func_name = call.func.name.id;
+        if (std.mem.eql(u8, func_name, "loads") and call.args.len == 1) {
+            // Just call the wrapper function directly with the string
+            try self.output.appendSlice(self.allocator, "try loads(");
+            try genExpr(self, call.args[0]);
+            try self.output.appendSlice(self.allocator, ", allocator)");
+            return;
+        }
+    }
+
     // Handle immediate lambda calls: (lambda x: x * 2)(5)
     if (call.func.* == .lambda) {
         // For immediate calls, we need the function name WITHOUT the & prefix
@@ -74,6 +87,17 @@ pub fn genCall(self: *NativeCodegen, call: ast.Node.Call) CodegenError!void {
     if (call.func.* == .attribute) {
         const attr = call.func.attribute;
 
+        // Check if this is an imported module call (mymath.add)
+        const is_module_call = if (attr.value.* == .name)
+            self.imported_modules.contains(attr.value.name.id)
+        else
+            false;
+
+        // Add 'try' for module calls (they can error)
+        if (is_module_call) {
+            try self.output.appendSlice(self.allocator, "try ");
+        }
+
         // Generic method call: obj.method(args)
         try genExpr(self, attr.value.*);
         try self.output.appendSlice(self.allocator, ".");
@@ -83,6 +107,14 @@ pub fn genCall(self: *NativeCodegen, call: ast.Node.Call) CodegenError!void {
         for (call.args, 0..) |arg, i| {
             if (i > 0) try self.output.appendSlice(self.allocator, ", ");
             try genExpr(self, arg);
+        }
+
+        // For module calls, add allocator as last argument
+        if (is_module_call) {
+            if (call.args.len > 0) {
+                try self.output.appendSlice(self.allocator, ", ");
+            }
+            try self.output.appendSlice(self.allocator, "allocator");
         }
 
         try self.output.appendSlice(self.allocator, ")");
@@ -145,20 +177,36 @@ pub fn genCall(self: *NativeCodegen, call: ast.Node.Call) CodegenError!void {
         }
 
         // Fallback: regular function call
+        // Check if this is a user-defined function that needs allocator
+        const user_func_needs_alloc = self.functions_needing_allocator.contains(func_name);
+
+        // Check if this is a from-imported function that needs allocator
+        const from_import_needs_alloc = self.from_import_needs_allocator.contains(func_name);
+
+        // Add 'try' if function needs allocator (can return errors)
+        if (user_func_needs_alloc) {
+            try self.output.appendSlice(self.allocator, "try ");
+        }
+
         try self.output.appendSlice(self.allocator, func_name);
         try self.output.appendSlice(self.allocator, "(");
 
-        // Check if this is a from-imported function that needs allocator
-        const needs_allocator = self.from_import_needs_allocator.contains(func_name);
+        // For user-defined functions: inject allocator as FIRST argument
+        if (user_func_needs_alloc) {
+            try self.output.appendSlice(self.allocator, "allocator");
+            if (call.args.len > 0) {
+                try self.output.appendSlice(self.allocator, ", ");
+            }
+        }
 
-        // Add regular arguments first
+        // Add regular arguments
         for (call.args, 0..) |arg, i| {
             if (i > 0) try self.output.appendSlice(self.allocator, ", ");
             try genExpr(self, arg);
         }
 
-        // Inject allocator as LAST argument for from-imported runtime functions
-        if (needs_allocator) {
+        // For from-imported functions: inject allocator as LAST argument
+        if (from_import_needs_alloc) {
             if (call.args.len > 0) {
                 try self.output.appendSlice(self.allocator, ", ");
             }

@@ -104,8 +104,16 @@ pub fn genSubscript(self: *NativeCodegen, subscript: ast.Node.Subscript) Codegen
                     break :blk false;
                 };
 
-                if (is_array_slice) {
-                    // Array slice: index directly without .items, use runtime bounds check
+                // Check if this variable is tracked as ArrayList
+                const is_tracked_arraylist = blk: {
+                    if (subscript.value.* == .name) {
+                        break :blk self.isArrayListVar(subscript.value.name.id);
+                    }
+                    break :blk false;
+                };
+
+                if (is_array_slice or !is_tracked_arraylist) {
+                    // Array slice or generic array: direct indexing without bounds check
                     const index_type = try self.type_inferrer.inferExpr(subscript.slice.index.*);
                     const needs_cast = (index_type == .int);
 
@@ -114,9 +122,10 @@ pub fn genSubscript(self: *NativeCodegen, subscript: ast.Node.Subscript) Codegen
                         try genExpr(self, subscript.value.*);
                         try self.output.appendSlice(self.allocator, "; const __idx = ");
                         try genSliceIndex(self, subscript.slice.index.*, true, false);
-                        try self.output.appendSlice(self.allocator, "; if (__idx >= __list.len) return error.IndexError; break :blk __list[__idx]; }");
+                        // No bounds check for arrays (Zig provides safety in debug mode)
+                        try self.output.appendSlice(self.allocator, "; break :blk __list[__idx]; }");
                     } else {
-                        // Runtime bounds check for positive index
+                        // Runtime bounds check for positive index (skip for parameters)
                         try self.output.appendSlice(self.allocator, "blk: { const __list = ");
                         try genExpr(self, subscript.value.*);
                         try self.output.appendSlice(self.allocator, "; const __idx = ");
@@ -127,7 +136,8 @@ pub fn genSubscript(self: *NativeCodegen, subscript: ast.Node.Subscript) Codegen
                         if (needs_cast) {
                             try self.output.appendSlice(self.allocator, "))");
                         }
-                        try self.output.appendSlice(self.allocator, "; if (__idx >= __list.len) return error.IndexError; break :blk __list[__idx]; }");
+                        // No bounds check for arrays (Zig provides safety in debug mode)
+                        try self.output.appendSlice(self.allocator, "; break :blk __list[__idx]; }");
                     }
                 } else {
                     // ArrayList indexing - use .items with runtime bounds check
@@ -186,22 +196,44 @@ pub fn genSubscript(self: *NativeCodegen, subscript: ast.Node.Subscript) Codegen
                         try genSliceIndex(self, subscript.slice.index.*, true, false);
                         try self.output.appendSlice(self.allocator, "]; }");
                     } else {
-                        // Positive index - use runtime bounds check to avoid compile-time errors in try/except
+                        // Positive index
                         const index_type = try self.type_inferrer.inferExpr(subscript.slice.index.*);
                         const needs_cast = (index_type == .int);
 
-                        // Generate: blk: { const __arr = arr; const __idx = idx; if (__idx >= __arr.len) return error.IndexError; break :blk __arr[__idx]; }
-                        try self.output.appendSlice(self.allocator, "blk: { const __arr = ");
-                        try genExpr(self, subscript.value.*);
-                        try self.output.appendSlice(self.allocator, "; const __idx = ");
-                        if (needs_cast) {
-                            try self.output.appendSlice(self.allocator, "@as(usize, @intCast(");
+                        // Check if this is an ArrayList (need .items[idx])
+                        const is_arraylist = blk: {
+                            if (subscript.value.* == .name) {
+                                break :blk self.isArrayListVar(subscript.value.name.id);
+                            }
+                            break :blk false;
+                        };
+
+                        if (is_arraylist) {
+                            // ArrayList: use .items with runtime bounds check
+                            try self.output.appendSlice(self.allocator, "blk: { const __arr = ");
+                            try genExpr(self, subscript.value.*);
+                            try self.output.appendSlice(self.allocator, "; const __idx = ");
+                            if (needs_cast) {
+                                try self.output.appendSlice(self.allocator, "@as(usize, @intCast(");
+                            }
+                            try genExpr(self, subscript.slice.index.*);
+                            if (needs_cast) {
+                                try self.output.appendSlice(self.allocator, "))");
+                            }
+                            try self.output.appendSlice(self.allocator, "; if (__idx >= __arr.items.len) return error.IndexError; break :blk __arr.items[__idx]; }");
+                        } else {
+                            // Array/slice: direct indexing (Zig provides safety in debug mode)
+                            try genExpr(self, subscript.value.*);
+                            try self.output.appendSlice(self.allocator, "[");
+                            if (needs_cast) {
+                                try self.output.appendSlice(self.allocator, "@as(usize, @intCast(");
+                            }
+                            try genExpr(self, subscript.slice.index.*);
+                            if (needs_cast) {
+                                try self.output.appendSlice(self.allocator, "))");
+                            }
+                            try self.output.appendSlice(self.allocator, "]");
                         }
-                        try genExpr(self, subscript.slice.index.*);
-                        if (needs_cast) {
-                            try self.output.appendSlice(self.allocator, "))");
-                        }
-                        try self.output.appendSlice(self.allocator, "; if (__idx >= __arr.len) return error.IndexError; break :blk __arr[__idx]; }");
                     }
                 }
             }

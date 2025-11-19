@@ -204,11 +204,12 @@ pub fn genPrint(self: *NativeCodegen, args: []ast.Node) CodegenError!void {
                 try self.output.appendSlice(self.allocator, "}\n");
             } else if (arg_type == .dict) {
                 // Format dict as Python dict string: {key: value, ...}
+                // Works for both PyObject dicts (from json.loads) and raw dict structs
                 try self.output.appendSlice(self.allocator, "{\n");
                 try self.output.appendSlice(self.allocator, "    const __dict = ");
                 try self.genExpr(arg);
                 try self.output.appendSlice(self.allocator, ";\n");
-                try self.output.appendSlice(self.allocator, "    const __dict_str = try runtime.PyDict_AsString(__dict, allocator);\n");
+                try self.output.appendSlice(self.allocator, "    const __dict_str = try runtime.formatPyObject(__dict, allocator);\n");
                 try self.output.appendSlice(self.allocator, "    defer allocator.free(__dict_str);\n");
                 try self.output.appendSlice(self.allocator, "    std.debug.print(\"{s}\", .{__dict_str});\n");
                 try self.output.appendSlice(self.allocator, "}\n");
@@ -372,7 +373,8 @@ pub fn genPrint(self: *NativeCodegen, args: []ast.Node) CodegenError!void {
                 .float => "{s}", // Use formatFloat for Python-style float printing
                 .bool => "{s}", // formatAny() returns string for bool
                 .string => "{s}",
-                else => "{any}", // Unknown types - let Zig handle them
+                .unknown => "{s}", // PyObjects - use formatPyObject
+                else => "{any}", // Other types - let Zig handle them
             };
             try self.output.appendSlice(self.allocator, fmt);
 
@@ -383,13 +385,18 @@ pub fn genPrint(self: *NativeCodegen, args: []ast.Node) CodegenError!void {
 
         try self.output.appendSlice(self.allocator, "\\n\", .{");
 
-        // Generate arguments - wrap bools with formatter
+        // Generate arguments - wrap bools and PyObjects with formatter
         for (args, 0..) |arg, i| {
             const arg_type = try self.type_inferrer.inferExpr(arg);
             if (arg_type == .bool) {
                 try self.output.appendSlice(self.allocator, "runtime.formatAny(");
                 try self.genExpr(arg);
                 try self.output.appendSlice(self.allocator, ")");
+            } else if (arg_type == .unknown) {
+                // PyObjects - format them properly
+                try self.output.appendSlice(self.allocator, "try runtime.formatPyObject(");
+                try self.genExpr(arg);
+                try self.output.appendSlice(self.allocator, ", allocator)");
             } else {
                 try self.genExpr(arg);
             }

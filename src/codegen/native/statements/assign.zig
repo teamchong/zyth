@@ -93,20 +93,39 @@ pub fn genAssign(self: *NativeCodegen, assign: ast.Node.Assign) CodegenError!voi
             const var_name = target.name.id;
 
             // Check collection types (still used for type annotation logic)
-            // Constant homogeneous lists become arrays, not ArrayLists
+            // Constant homogeneous lists become arrays UNLESS they will be mutated
             const is_constant_array = blk: {
                 if (assign.value.* != .list) break :blk false;
                 const list = assign.value.list;
-                // If it's a constant list, it becomes an array
-                if (isConstantList(list) and allSameType(list.elts)) break :blk true;
-                break :blk false;
+                // Check if list is constant and homogeneous
+                if (!isConstantList(list) or !allSameType(list.elts)) break :blk false;
+
+                // Check mutation analysis - if variable will be mutated, use ArrayList not array
+                if (self.mutation_info) |mutations| {
+                    const mutation_analyzer = @import("../../../analysis/native_types/mutation_analyzer.zig");
+                    if (mutation_analyzer.hasListMutation(mutations.*, var_name)) {
+                        break :blk false; // Will be mutated -> ArrayList, not array
+                    }
+                }
+
+                break :blk true; // Constant, homogeneous, not mutated -> fixed array
             };
             const is_arraylist = blk: {
                 if (assign.value.* != .list) break :blk false;
                 const list = assign.value.list;
-                // If it's a constant list, it becomes an array, not ArrayList
-                if (isConstantList(list) and allSameType(list.elts)) break :blk false;
-                break :blk true;
+
+                // Non-constant lists always become ArrayList
+                if (!isConstantList(list) or !allSameType(list.elts)) break :blk true;
+
+                // Constant lists that will be mutated become ArrayList
+                if (self.mutation_info) |mutations| {
+                    const mutation_analyzer = @import("../../../analysis/native_types/mutation_analyzer.zig");
+                    if (mutation_analyzer.hasListMutation(mutations.*, var_name)) {
+                        break :blk true; // Will be mutated -> ArrayList
+                    }
+                }
+
+                break :blk false; // Constant, homogeneous, not mutated -> fixed array
             };
             const is_listcomp = (assign.value.* == .listcomp);
             const is_dict = (assign.value.* == .dict);
@@ -209,7 +228,11 @@ pub fn genAssign(self: *NativeCodegen, assign: ast.Node.Assign) CodegenError!voi
                     break :blk self.mutable_classes.contains(func_name);
                 };
 
-                const needs_var = is_arraylist or is_dict or is_mutable_class_instance;
+                // Check if variable is mutated (reassigned later)
+                // This is especially important for strings in functions that get reassigned
+                const is_mutated = self.semantic_info.isMutated(var_name);
+
+                const needs_var = is_arraylist or is_dict or is_mutable_class_instance or is_mutated;
 
                 if (needs_var) {
                     try self.output.appendSlice(self.allocator, "var ");
@@ -291,10 +314,69 @@ pub fn genAssign(self: *NativeCodegen, assign: ast.Node.Assign) CodegenError!voi
                 }
             }
 
+            // Special handling for list literals that will be mutated
+            // Generate ArrayList initialization directly instead of fixed array
+            if (is_arraylist and assign.value.* == .list) {
+                const list = assign.value.list;
+                // Generate ArrayList initialization
+                // Determine element type
+                const elem_type = if (list.elts.len > 0)
+                    try self.type_inferrer.inferExpr(list.elts[0])
+                else
+                    .int; // Default to int for empty lists
+
+                try self.output.appendSlice(self.allocator, "std.ArrayList(");
+                try elem_type.toZigType(self.allocator, &self.output);
+                try self.output.appendSlice(self.allocator, "){};\n");
+
+                // Append elements
+                for (list.elts) |elem| {
+                    try self.emitIndent();
+                    try self.output.appendSlice(self.allocator, "try ");
+                    const actual_name = self.var_renames.get(var_name) orelse var_name;
+                    try self.output.appendSlice(self.allocator, actual_name);
+                    try self.output.appendSlice(self.allocator, ".append(allocator, ");
+                    try self.genExpr(elem);
+                    try self.output.appendSlice(self.allocator, ");\n");
+                }
+
+                // Track this variable as ArrayList for len() generation
+                const var_name_copy = try self.allocator.dupe(u8, var_name);
+                try self.arraylist_vars.put(var_name_copy, {});
+
+                // Add defer cleanup
+                try deferCleanup.emitDeferCleanups(
+                    self,
+                    var_name,
+                    is_first_assignment,
+                    is_arraylist,
+                    is_listcomp,
+                    is_dict,
+                    is_allocated_string,
+                    assign.value.*,
+                );
+                return;
+            }
+
             // Emit value
             try self.genExpr(assign.value.*);
 
             try self.output.appendSlice(self.allocator, ";\n");
+
+            // Track ArrayList variables (dict.values(), dict.keys(), str.split() return ArrayList)
+            if (is_first_assignment and assign.value.* == .call) {
+                const call = assign.value.call;
+                if (call.func.* == .attribute) {
+                    const attr = call.func.attribute;
+                    if (std.mem.eql(u8, attr.attr, "values") or
+                        std.mem.eql(u8, attr.attr, "keys") or
+                        std.mem.eql(u8, attr.attr, "split")) {
+                        // dict.values(), dict.keys(), str.split() return ArrayList
+                        const var_name_copy = try self.allocator.dupe(u8, var_name);
+                        try self.arraylist_vars.put(var_name_copy, {});
+                    }
+                }
+            }
 
             const lambda_closure = @import("../expressions/lambda_closure.zig");
             const lambda_mod = @import("../expressions/lambda.zig");

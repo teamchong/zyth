@@ -5,21 +5,18 @@ const CodegenError = @import("main.zig").CodegenError;
 const NativeCodegen = @import("main.zig").NativeCodegen;
 
 /// Generate code for json.loads(json_string)
-/// NOTE: Leaks arena allocator - std.json.parseFromSlice allocates internal arena
-/// Memory is freed at program exit (acceptable for short-lived AOT programs)
-/// TODO: Implement scope-based cleanup for long-running programs
+/// Parses JSON and returns a PyObject (dict/list/etc)
 pub fn genJsonLoads(self: *NativeCodegen, args: []ast.Node) CodegenError!void {
     if (args.len != 1) {
         // TODO: Error handling
         return;
     }
 
-    // Parse JSON and extract value
-    // parseFromSlice creates internal arena - we extract value but don't deinit the Parsed struct
-    // This leaks the arena but memory is reclaimed at program exit
-    try self.output.appendSlice(self.allocator, "blk: { const parsed = try std.json.parseFromSlice(std.json.Value, allocator, ");
+    // runtime.json.loads expects (*PyObject, allocator) and returns !*PyObject
+    // We need to wrap string literal in PyString first
+    try self.output.appendSlice(self.allocator, "blk: { const json_str_obj = try runtime.PyString.create(allocator, ");
     try self.genExpr(args[0]);
-    try self.output.appendSlice(self.allocator, ", .{}); break :blk parsed.value; }");
+    try self.output.appendSlice(self.allocator, "); defer runtime.decref(json_str_obj, allocator); break :blk try runtime.json.loads(json_str_obj, allocator); }");
 }
 
 /// Generate code for json.dumps(obj)

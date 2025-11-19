@@ -70,6 +70,9 @@ pub const NativeCodegen = struct {
     // Track which variables hold array slices (result of slicing a constant array)
     array_slice_vars: std.StringHashMap(void),
 
+    // Track ArrayList variables (for len() -> .items.len)
+    arraylist_vars: std.StringHashMap(void),
+
     // Track which classes have mutating methods (need var instances, not const)
     mutable_classes: std.StringHashMap(void),
 
@@ -94,6 +97,18 @@ pub const NativeCodegen = struct {
     // Track from-imported functions that need allocator argument
     // Maps symbol name -> true (e.g., "loads" -> true)
     from_import_needs_allocator: std.StringHashMap(void),
+
+    // Track which user-defined functions need allocator parameter
+    // Maps function name -> void (e.g., "greet" -> {})
+    functions_needing_allocator: std.StringHashMap(void),
+
+    // Track imported module names (for mymath.add() -> needs allocator)
+    // Maps module name -> void (e.g., "mymath" -> {})
+    imported_modules: std.StringHashMap(void),
+
+    // Track variable mutations (for list ArrayList vs fixed array decision)
+    // Maps variable name -> mutation info
+    mutation_info: ?*const @import("../../../analysis/native_types/mutation_analyzer.zig").MutationMap,
 
     pub fn init(allocator: std.mem.Allocator, type_inferrer: *TypeInferrer, semantic_info: *SemanticInfo) !*NativeCodegen {
         const self = try allocator.create(NativeCodegen);
@@ -128,6 +143,7 @@ pub const NativeCodegen = struct {
             .hoisted_vars = std.StringHashMap(void).init(allocator),
             .array_vars = std.StringHashMap(void).init(allocator),
             .array_slice_vars = std.StringHashMap(void).init(allocator),
+            .arraylist_vars = std.StringHashMap(void).init(allocator),
             .mutable_classes = std.StringHashMap(void).init(allocator),
             .comptime_evaluator = comptime_eval.ComptimeEvaluator.init(allocator),
             .import_ctx = null,
@@ -136,6 +152,9 @@ pub const NativeCodegen = struct {
             .import_registry = registry,
             .from_imports = std.ArrayList(FromImportInfo){},
             .from_import_needs_allocator = std.StringHashMap(void).init(allocator),
+            .functions_needing_allocator = std.StringHashMap(void).init(allocator),
+            .imported_modules = std.StringHashMap(void).init(allocator),
+            .mutation_info = null,
         };
         return self;
     }
@@ -197,8 +216,29 @@ pub const NativeCodegen = struct {
         }
         self.array_slice_vars.deinit();
 
+        // Clean up arraylist vars tracking
+        var arrlist_iter = self.arraylist_vars.keyIterator();
+        while (arrlist_iter.next()) |key| {
+            self.allocator.free(key.*);
+        }
+        self.arraylist_vars.deinit();
+
         // Clean up decorated functions tracking
         self.decorated_functions.deinit(self.allocator);
+
+        // Clean up functions_needing_allocator tracking
+        var func_alloc_iter = self.functions_needing_allocator.keyIterator();
+        while (func_alloc_iter.next()) |key| {
+            self.allocator.free(key.*);
+        }
+        self.functions_needing_allocator.deinit();
+
+        // Clean up imported_modules tracking
+        var imported_iter = self.imported_modules.keyIterator();
+        while (imported_iter.next()) |key| {
+            self.allocator.free(key.*);
+        }
+        self.imported_modules.deinit();
 
         // Clean up import registry
         self.import_registry.deinit();
@@ -236,6 +276,11 @@ pub const NativeCodegen = struct {
     /// Check if variable holds an array slice (result of slicing constant array)
     pub fn isArraySliceVar(self: *NativeCodegen, name: []const u8) bool {
         return self.array_slice_vars.contains(name);
+    }
+
+    /// Check if variable is an ArrayList (needs .items.len for len())
+    pub fn isArrayListVar(self: *NativeCodegen, name: []const u8) bool {
+        return self.arraylist_vars.contains(name);
     }
 
     // Helper functions - public for use by statements.zig and expressions.zig
