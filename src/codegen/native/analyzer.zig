@@ -131,6 +131,25 @@ fn analyzeExpr(node: ast.Node) !ModuleAnalysis {
     var analysis = ModuleAnalysis{};
 
     switch (node) {
+        .fstring => |f| {
+            // F-strings use std.fmt.allocPrint which needs allocator
+            analysis.needs_allocator = true;
+
+            // Analyze expressions inside f-string parts
+            for (f.parts) |part| {
+                switch (part) {
+                    .expr => |expr| {
+                        const part_analysis = try analyzeExpr(expr.*);
+                        analysis.merge(part_analysis);
+                    },
+                    .format_expr => |fe| {
+                        const part_analysis = try analyzeExpr(fe.expr.*);
+                        analysis.merge(part_analysis);
+                    },
+                    .literal => {},
+                }
+            }
+        },
         .call => |call| {
             // Check for module.function() calls
             if (call.func.* == .attribute) {

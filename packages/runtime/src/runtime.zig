@@ -2,6 +2,8 @@
 /// Core runtime support for compiled Python code
 const std = @import("std");
 const pyint = @import("pyint.zig");
+const pyfloat = @import("pyfloat.zig");
+const pybool = @import("pybool.zig");
 const pylist = @import("pylist.zig");
 const pystring = @import("pystring.zig");
 const pytuple = @import("pytuple.zig");
@@ -63,6 +65,14 @@ pub fn decref(obj: *PyObject, allocator: std.mem.Allocator) void {
         switch (obj.type_id) {
             .int => {
                 const data: *PyInt = @ptrCast(@alignCast(obj.data));
+                allocator.destroy(data);
+            },
+            .float => {
+                const data: *PyFloat = @ptrCast(@alignCast(obj.data));
+                allocator.destroy(data);
+            },
+            .bool => {
+                const data: *PyBool = @ptrCast(@alignCast(obj.data));
                 allocator.destroy(data);
             },
             .list => {
@@ -157,6 +167,12 @@ pub fn printList(obj: *PyObject) void {
 /// Python integer type - re-exported from pyint.zig
 pub const PyInt = pyint.PyInt;
 
+/// Python float type - re-exported from pyfloat.zig
+pub const PyFloat = pyfloat.PyFloat;
+
+/// Python bool type - re-exported from pybool.zig
+pub const PyBool = pybool.PyBool;
+
 /// Helper functions for operations that can raise exceptions
 /// Integer division with zero check
 pub fn divideInt(a: i64, b: i64) PythonError!i64 {
@@ -234,6 +250,35 @@ pub inline fn formatAny(value: anytype) (if (@TypeOf(value) == bool) []const u8 
     } else {
         return value;
     }
+}
+
+/// Format PyObject as string for printing
+/// Used when printing dict values with unknown/mixed types
+/// Returns a formatted string that can be printed with {s}
+pub fn formatPyObject(obj: *PyObject, allocator: std.mem.Allocator) ![]const u8 {
+    return switch (obj.type_id) {
+        .string => blk: {
+            const str_data: *PyString = @ptrCast(@alignCast(obj.data));
+            break :blk str_data.data;
+        },
+        .int => blk: {
+            const int_data: *PyInt = @ptrCast(@alignCast(obj.data));
+            var buf = std.ArrayList(u8){};
+            try buf.writer(allocator).print("{d}", .{int_data.value});
+            break :blk try buf.toOwnedSlice(allocator);
+        },
+        .float => blk: {
+            const float_data: *PyFloat = @ptrCast(@alignCast(obj.data));
+            var buf = std.ArrayList(u8){};
+            try buf.writer(allocator).print("{d}", .{float_data.value});
+            break :blk try buf.toOwnedSlice(allocator);
+        },
+        .bool => blk: {
+            const bool_data: *PyBool = @ptrCast(@alignCast(obj.data));
+            break :blk if (bool_data.value) "True" else "False";
+        },
+        else => "<object>",
+    };
 }
 
 /// Python list type - re-exported from pylist.zig

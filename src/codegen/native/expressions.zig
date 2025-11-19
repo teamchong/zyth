@@ -39,6 +39,7 @@ pub fn genExpr(self: *NativeCodegen, node: ast.Node) CodegenError!void {
             const name_to_use = self.var_renames.get(n.id) orelse n.id;
             try self.output.appendSlice(self.allocator, name_to_use);
         },
+        .fstring => |f| try genFString(self, f),
         .binop => |b| try operators.genBinOp(self, b),
         .unaryop => |u| try operators.genUnaryOp(self, u),
         .compare => |c| try operators.genCompare(self, c),
@@ -54,4 +55,146 @@ pub fn genExpr(self: *NativeCodegen, node: ast.Node) CodegenError!void {
         .lambda => |lam| lambda_mod.genLambda(self, lam) catch {},
         else => {},
     }
+}
+
+/// Convert Python format specifier to Zig format specifier
+fn convertFormatSpec(allocator: std.mem.Allocator, python_spec: []const u8) ![]const u8 {
+    // Python: .2f  -> Zig: d:.2
+    // Python: d    -> Zig: d
+    // Python: s    -> Zig: s
+    // Python: .3f  -> Zig: d:.3
+    // Python: 10.2f -> Zig: d:10.2
+
+    if (std.mem.indexOf(u8, python_spec, "f") != null) {
+        // Float format: .2f, 10.2f, etc.
+        // Remove 'f' and prepend 'd:'
+        var buf = std.ArrayList(u8){};
+        try buf.appendSlice(allocator, "d:");
+        for (python_spec) |c| {
+            if (c != 'f') try buf.append(allocator, c);
+        }
+        return buf.toOwnedSlice(allocator);
+    }
+
+    // Return as-is for other specs
+    return allocator.dupe(u8, python_spec);
+}
+
+/// Generate f-string code
+fn genFString(self: *NativeCodegen, fstring: ast.Node.FString) CodegenError!void {
+    // For now, generate a compile-time concatenation if possible
+    // or use std.fmt.allocPrint for runtime formatting
+
+    // Check if all parts are literals (simple case)
+    var all_literals = true;
+    for (fstring.parts) |part| {
+        if (part != .literal) {
+            all_literals = false;
+            break;
+        }
+    }
+
+    if (all_literals) {
+        // Simple case: just concatenate literals
+        try self.output.appendSlice(self.allocator, "\"");
+        for (fstring.parts) |part| {
+            const lit = part.literal;
+            for (lit) |c| {
+                switch (c) {
+                    '"' => try self.output.appendSlice(self.allocator, "\\\""),
+                    '\\' => try self.output.appendSlice(self.allocator, "\\\\"),
+                    '\n' => try self.output.appendSlice(self.allocator, "\\n"),
+                    '\r' => try self.output.appendSlice(self.allocator, "\\r"),
+                    '\t' => try self.output.appendSlice(self.allocator, "\\t"),
+                    else => try self.output.writer(self.allocator).print("{c}", .{c}),
+                }
+            }
+        }
+        try self.output.appendSlice(self.allocator, "\"");
+        return;
+    }
+
+    // Complex case: has expressions, need runtime formatting
+    // Build format string and arguments list
+    var format_buf = std.ArrayList(u8){};
+    defer format_buf.deinit(self.allocator);
+
+    var args_list = std.ArrayList([]const u8){};
+    defer {
+        for (args_list.items) |item| {
+            self.allocator.free(item);
+        }
+        args_list.deinit(self.allocator);
+    }
+
+    for (fstring.parts) |part| {
+        switch (part) {
+            .literal => |lit| {
+                // Escape braces for Zig format strings
+                for (lit) |c| {
+                    if (c == '{' or c == '}') {
+                        try format_buf.append(self.allocator, c);
+                        try format_buf.append(self.allocator, c); // Double to escape
+                    } else {
+                        try format_buf.append(self.allocator, c);
+                    }
+                }
+            },
+            .expr => |expr| {
+                // Determine format specifier based on inferred type
+                const expr_type = try self.type_inferrer.inferExpr(expr.*);
+                const format_spec = switch (expr_type) {
+                    .int => "d",
+                    .float => "e",
+                    .string => "s",
+                    .bool => "any",
+                    else => "any",
+                };
+
+                try format_buf.writer(self.allocator).print("{{{s}}}", .{format_spec});
+
+                // Generate expression code and capture it
+                const saved_output = self.output;
+                self.output = std.ArrayList(u8){};
+
+                try genExpr(self, expr.*);
+                const expr_code = try self.output.toOwnedSlice(self.allocator);
+                try args_list.append(self.allocator, expr_code);
+
+                self.output = saved_output;
+            },
+            .format_expr => |fe| {
+                // Convert Python format spec to Zig format spec
+                const zig_spec = try convertFormatSpec(self.allocator, fe.format_spec);
+                defer self.allocator.free(zig_spec);
+
+                try format_buf.writer(self.allocator).print("{{{s}}}", .{zig_spec});
+
+                // Generate expression code
+                const saved_output = self.output;
+                self.output = std.ArrayList(u8){};
+
+                try genExpr(self, fe.expr.*);
+                const expr_code = try self.output.toOwnedSlice(self.allocator);
+                try args_list.append(self.allocator, expr_code);
+
+                self.output = saved_output;
+            },
+        }
+    }
+
+    // Build args tuple string
+    var args_buf = std.ArrayList(u8){};
+    defer args_buf.deinit(self.allocator);
+
+    for (args_list.items, 0..) |arg, i| {
+        if (i > 0) try args_buf.appendSlice(self.allocator, ", ");
+        try args_buf.appendSlice(self.allocator, arg);
+    }
+
+    // Generate std.fmt.allocPrint call wrapped in a comptime or runtime block
+    try self.output.writer(self.allocator).print(
+        "(try std.fmt.allocPrint(allocator, \"{s}\", .{{ {s} }}))",
+        .{ format_buf.items, args_buf.items },
+    );
 }

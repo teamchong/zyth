@@ -16,6 +16,7 @@ pub fn inferExpr(
 ) InferError!NativeType {
     return switch (node) {
         .constant => |c| inferConstant(c.value),
+        .fstring => .{ .string = .runtime },
         .name => |n| var_types.get(n.id) orelse .unknown,
         .binop => |b| try inferBinOp(allocator, var_types, class_fields, func_return_types, b),
         .call => |c| try inferCall(allocator, var_types, class_fields, func_return_types, c),
@@ -39,6 +40,8 @@ pub fn inferExpr(
                     } else if (obj_type == .list) {
                         break :blk obj_type.list.*;
                     } else if (obj_type == .dict) {
+                        // Return the dict's value type
+                        // Note: Codegen converts mixed-type dicts to string dicts
                         break :blk obj_type.dict.value.*;
                     } else if (obj_type == .tuple) {
                         // Try to get constant index
@@ -119,11 +122,30 @@ pub fn inferExpr(
             break :blk .{ .list = elem_ptr };
         },
         .dict => |d| blk: {
-            // Infer value type from first value if available
-            const val_type = if (d.values.len > 0)
-                try inferExpr(allocator, var_types, class_fields, func_return_types, d.values[0])
-            else
-                .unknown;
+            // Check if dict has mixed types - codegen converts mixed dicts to StringHashMap([]const u8)
+            var val_type: NativeType = .unknown;
+            var has_mixed_types = false;
+
+            if (d.values.len > 0) {
+                val_type = try inferExpr(allocator, var_types, class_fields, func_return_types, d.values[0]);
+
+                // Check if all values have same type
+                for (d.values[1..]) |value| {
+                    const this_type = try inferExpr(allocator, var_types, class_fields, func_return_types, value);
+                    // Compare type tags
+                    const tag1 = @as(std.meta.Tag(NativeType), val_type);
+                    const tag2 = @as(std.meta.Tag(NativeType), this_type);
+                    if (tag1 != tag2) {
+                        has_mixed_types = true;
+                        break;
+                    }
+                }
+
+                // If mixed types, codegen will convert all to strings
+                if (has_mixed_types) {
+                    val_type = .{ .string = .runtime };
+                }
+            }
 
             // Allocate on heap to avoid dangling pointer
             const val_ptr = try allocator.create(NativeType);
@@ -133,7 +155,6 @@ pub fn inferExpr(
             const key_ptr = try allocator.create(NativeType);
             key_ptr.* = .{ .string = .runtime };
 
-            // For now, always use string keys (most common case)
             break :blk .{ .dict = .{
                 .key = key_ptr,
                 .value = val_ptr,

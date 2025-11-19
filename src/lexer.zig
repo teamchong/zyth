@@ -36,6 +36,7 @@ pub const TokenType = enum {
     Ident,
     Number,
     String,
+    FString,
 
     // Operators
     Plus,
@@ -83,11 +84,21 @@ pub const TokenType = enum {
     Eof,
 };
 
+pub const FStringPart = union(enum) {
+    literal: []const u8,
+    expr: []const u8,
+    format_expr: struct {
+        expr: []const u8,
+        format_spec: []const u8,
+    },
+};
+
 pub const Token = struct {
     type: TokenType,
     lexeme: []const u8,
     line: usize,
     column: usize,
+    fstring_parts: ?[]FStringPart = null,
 };
 
 pub const Lexer = struct {
@@ -167,6 +178,14 @@ pub const Lexer = struct {
                 continue;
             }
 
+            // F-strings (check before identifiers)
+            if (c == 'f' and (self.peekAhead(1) == '"' or self.peekAhead(1) == '\'')) {
+                _ = self.advance(); // consume 'f'
+                const token = try self.tokenizeFString(start, start_column);
+                try tokens.append(self.allocator, token);
+                continue;
+            }
+
             // Identifiers and keywords
             if (self.isAlpha(c)) {
                 const token = try self.tokenizeIdentifier(start, start_column);
@@ -226,6 +245,7 @@ pub const Lexer = struct {
     const tokenizeIdentifier = tokenizer.tokenizeIdentifier;
     const tokenizeNumber = tokenizer.tokenizeNumber;
     const tokenizeString = tokenizer.tokenizeString;
+    const tokenizeFString = tokenizer.tokenizeFString;
     const tokenizeOperatorOrDelimiter = tokenizer.tokenizeOperatorOrDelimiter;
 
     pub fn getKeyword(self: *Lexer, lexeme: []const u8) TokenType {

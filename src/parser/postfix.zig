@@ -224,6 +224,64 @@ pub fn parsePrimary(self: *Parser) ParseError!ast.Node {
                     },
                 };
             },
+            .FString => {
+                const fstr_tok = self.advance().?;
+                const lexer_parts = fstr_tok.fstring_parts orelse &[_]lexer.FStringPart{};
+
+                // Convert lexer FStringParts to AST FStringParts
+                var ast_parts = try self.allocator.alloc(ast.FStringPart, lexer_parts.len);
+
+                for (lexer_parts, 0..) |lexer_part, i| {
+                    switch (lexer_part) {
+                        .literal => |lit| {
+                            ast_parts[i] = .{ .literal = lit };
+                        },
+                        .expr => |expr_text| {
+                            // Parse the expression text into an AST node
+                            var expr_lexer = try lexer.Lexer.init(self.allocator, expr_text);
+                            defer expr_lexer.deinit();
+
+                            const expr_tokens = try expr_lexer.tokenize();
+                            defer self.allocator.free(expr_tokens);
+
+                            var expr_parser = Parser.init(self.allocator, expr_tokens);
+                            const expr_node = try expr_parser.parseExpression();
+
+                            const expr_ptr = try self.allocator.create(ast.Node);
+                            expr_ptr.* = expr_node;
+
+                            ast_parts[i] = .{ .expr = expr_ptr };
+                        },
+                        .format_expr => |fe| {
+                            // Parse the expression text into an AST node
+                            var expr_lexer = try lexer.Lexer.init(self.allocator, fe.expr);
+                            defer expr_lexer.deinit();
+
+                            const expr_tokens = try expr_lexer.tokenize();
+                            defer self.allocator.free(expr_tokens);
+
+                            var expr_parser = Parser.init(self.allocator, expr_tokens);
+                            const expr_node = try expr_parser.parseExpression();
+
+                            const expr_ptr = try self.allocator.create(ast.Node);
+                            expr_ptr.* = expr_node;
+
+                            ast_parts[i] = .{
+                                .format_expr = .{
+                                    .expr = expr_ptr,
+                                    .format_spec = fe.format_spec,
+                                },
+                            };
+                        },
+                    }
+                }
+
+                return ast.Node{
+                    .fstring = .{
+                        .parts = ast_parts,
+                    },
+                };
+            },
             .True => {
                 _ = self.advance();
                 return ast.Node{

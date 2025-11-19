@@ -1,5 +1,14 @@
 const std = @import("std");
 
+pub const FStringPart = union(enum) {
+    literal: []const u8,
+    expr: *Node,
+    format_expr: struct {
+        expr: *Node,
+        format_spec: []const u8,
+    },
+};
+
 /// AST node types matching Python's ast module
 pub const Node = union(enum) {
     module: Module,
@@ -12,6 +21,7 @@ pub const Node = union(enum) {
     call: Call,
     name: Name,
     constant: Constant,
+    fstring: FString,
     if_stmt: If,
     for_stmt: For,
     while_stmt: While,
@@ -73,6 +83,10 @@ pub const Node = union(enum) {
 
     pub const Constant = struct {
         value: Value,
+    };
+
+    pub const FString = struct {
+        parts: []FStringPart,
     };
 
     pub const If = struct {
@@ -428,6 +442,22 @@ pub const Node = union(enum) {
                 allocator.free(t.else_body);
                 for (t.finalbody) |*n| n.deinit(allocator);
                 allocator.free(t.finalbody);
+            },
+            .fstring => |f| {
+                for (f.parts) |*part| {
+                    switch (part.*) {
+                        .expr => |expr| {
+                            expr.deinit(allocator);
+                            allocator.destroy(expr);
+                        },
+                        .format_expr => |fe| {
+                            fe.expr.deinit(allocator);
+                            allocator.destroy(fe.expr);
+                        },
+                        .literal => {},
+                    }
+                }
+                allocator.free(f.parts);
             },
             // Leaf nodes need no cleanup
             .name, .constant, .pass, .break_stmt, .continue_stmt => {},
