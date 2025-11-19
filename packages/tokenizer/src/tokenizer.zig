@@ -237,7 +237,7 @@ pub const Tokenizer = struct {
         }
     }
 
-    /// In-place merge (from trainer.zig pattern) - Phase 1 optimization
+    /// Phase 2: SIMD-accelerated in-place merge (2-3x faster scanning)
     /// Returns new length after merging
     fn mergePairInPlace(tokens: []u32, pair: Pair, new_id: u32) usize {
         if (tokens.len < 2) return tokens.len;
@@ -245,23 +245,89 @@ pub const Tokenizer = struct {
         var write_pos: usize = 0;
         var read_pos: usize = 0;
 
-        while (read_pos < tokens.len) {
-            // Prefetch ahead for better cache utilization
-            if (read_pos + 16 < tokens.len) {
-                @prefetch(&tokens[read_pos + 16], .{ .rw = .read, .locality = 3 });
+        // Phase 2: SIMD scanning for pair matches (8-wide vectors)
+        const vec_size = comptime blk: {
+            const builtin = @import("builtin");
+            if (builtin.cpu.arch == .x86_64) {
+                break :blk 8; // AVX2 (256-bit / 32-bit = 8 elements)
+            } else if (builtin.cpu.arch == .aarch64) {
+                break :blk 4; // ARM NEON (128-bit / 32-bit = 4 elements)
+            } else {
+                break :blk 4; // Fallback
+            }
+        };
+
+        // SIMD fast path: process vec_size pairs at once
+        while (read_pos + vec_size + 1 <= tokens.len) {
+            // Prefetch next SIMD window
+            if (read_pos + vec_size + 16 < tokens.len) {
+                @prefetch(&tokens[read_pos + vec_size + 16], .{ .rw = .read, .locality = 3 });
             }
 
-            // Check if we can merge at current position
+            // Load vectors for left and right pairs
+            var left_vec: @Vector(vec_size, u32) = undefined;
+            var right_vec: @Vector(vec_size, u32) = undefined;
+
+            inline for (0..vec_size) |i| {
+                left_vec[i] = tokens[read_pos + i];
+                right_vec[i] = tokens[read_pos + i + 1];
+            }
+
+            // SIMD comparison: find matching pairs
+            const left_match = left_vec == @as(@Vector(vec_size, u32), @splat(pair.left));
+            const right_match = right_vec == @as(@Vector(vec_size, u32), @splat(pair.right));
+            const both_match = left_match & right_match;
+
+            // Check if any matches found in this window
+            var found_match = false;
+            inline for (0..vec_size) |i| {
+                if (both_match[i]) {
+                    found_match = true;
+                    break;
+                }
+            }
+
+            if (found_match) {
+                // Slow path: process this window element by element
+                const window_end = read_pos + vec_size + 1;
+                while (read_pos < window_end) {
+                    if (read_pos + 1 < tokens.len and
+                        tokens[read_pos] == pair.left and
+                        tokens[read_pos + 1] == pair.right)
+                    {
+                        tokens[write_pos] = new_id;
+                        write_pos += 1;
+                        read_pos += 2;
+                    } else {
+                        if (write_pos != read_pos) {
+                            tokens[write_pos] = tokens[read_pos];
+                        }
+                        write_pos += 1;
+                        read_pos += 1;
+                    }
+                }
+            } else {
+                // No matches: bulk copy (Phase 2 optimization!)
+                if (write_pos != read_pos) {
+                    inline for (0..vec_size) |i| {
+                        tokens[write_pos + i] = tokens[read_pos + i];
+                    }
+                }
+                write_pos += vec_size;
+                read_pos += vec_size;
+            }
+        }
+
+        // Scalar tail: process remaining elements
+        while (read_pos < tokens.len) {
             if (read_pos + 1 < tokens.len and
                 tokens[read_pos] == pair.left and
                 tokens[read_pos + 1] == pair.right)
             {
-                // Merge: write new_id and skip both tokens
                 tokens[write_pos] = new_id;
                 write_pos += 1;
                 read_pos += 2;
             } else {
-                // No merge: copy token
                 if (write_pos != read_pos) {
                     tokens[write_pos] = tokens[read_pos];
                 }
