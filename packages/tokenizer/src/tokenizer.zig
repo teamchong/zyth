@@ -206,13 +206,13 @@ pub const Tokenizer = struct {
 
     /// Encode text to token IDs with SIMD optimization
     pub fn encode(self: *Tokenizer, text: []const u8) ![]u32 {
-        // Start with bytes as tokens
-        var tokens = std.ArrayList(u32){};
+        // Pre-allocate for speed (avoid reallocs!)
+        var tokens = try std.ArrayList(u32).initCapacity(self.allocator, text.len);
         errdefer tokens.deinit(self.allocator);
 
-        // Convert text to token IDs (bytes initially)
+        // Convert text to token IDs (bytes initially) - appendAssumeCapacity is unsafe but fast!
         for (text) |byte| {
-            try tokens.append(self.allocator, byte);
+            tokens.appendAssumeCapacity(byte);
         }
 
         // Apply BPE merges (SIMD-accelerated)
