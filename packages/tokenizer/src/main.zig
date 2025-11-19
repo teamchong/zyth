@@ -91,8 +91,8 @@ pub fn main() !void {
     std.debug.print("  Learned merges: {}\n", .{tokenizer.merges.items.len});
     std.debug.print("  Vocab size: {}\n\n", .{256 + tokenizer.merges.items.len});
 
-    // Benchmark 2: Encoding (vs tiktoken/rustbpe)
-    std.debug.print("Benchmark 2: Encoding Speed\n", .{});
+    // Benchmark 2: Encoding (vs tiktoken/rustbpe) - run for ~60s
+    std.debug.print("Benchmark 2: Encoding Speed (60s target)\n", .{});
     std.debug.print("-" ** 40 ++ "\n", .{});
 
     const test_text =
@@ -103,12 +103,22 @@ pub fn main() !void {
         \\Modern language models use BPE tokenization for efficiency.
     ;
 
-    // Warm-up
+    // Calibration: How many iterations for ~60s?
+    std.debug.print("  Calibrating iterations...\n", .{});
+    const cal_start = std.time.nanoTimestamp();
     var tokens = try tokenizer.encode(test_text);
     allocator.free(tokens);
+    const cal_elapsed = std.time.nanoTimestamp() - cal_start;
 
-    // Benchmark (10000 iterations)
-    const iterations = 10_000;
+    const target_duration_ns: i128 = 60_000_000_000; // 60 seconds
+    const iterations = @max(100, @min(100_000, @as(usize, @intCast(@divFloor(target_duration_ns, cal_elapsed)))));
+
+    std.debug.print("  Running {} iterations (estimated {}s)\n", .{
+        iterations,
+        @divFloor(cal_elapsed * @as(i128, @intCast(iterations)), 1_000_000_000),
+    });
+
+    // Actual benchmark
     const encode_start = std.time.nanoTimestamp();
 
     var i: usize = 0;
@@ -119,7 +129,7 @@ pub fn main() !void {
 
     const encode_end = std.time.nanoTimestamp();
     const encode_total_ms = @divFloor(encode_end - encode_start, 1_000_000);
-    const encode_per_iter_us = @divFloor(encode_end - encode_start, iterations * 1000);
+    const encode_per_iter_us = @divFloor(encode_end - encode_start, @as(i128, @intCast(iterations)) * 1000);
 
     std.debug.print("  Total time ({} iterations): {}ms\n", .{ iterations, encode_total_ms });
     std.debug.print("  Per iteration: {}μs\n", .{encode_per_iter_us});
