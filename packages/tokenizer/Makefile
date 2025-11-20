@@ -1,4 +1,4 @@
-.PHONY: help benchmark benchmark-train benchmark-encoding benchmark-web build clean
+.PHONY: help benchmark benchmark-train benchmark-encoding benchmark-web benchmark-quick build clean
 
 # Colors for output
 GREEN := \033[0;32m
@@ -14,6 +14,7 @@ help:
 	@echo ""
 	@echo "$(GREEN)Available targets:$(RESET)"
 	@echo "  make benchmark          - Run all benchmarks (train + encoding + web)"
+	@echo "  make benchmark-quick    - PyAOT vs TokenDagger only (fast iteration)"
 	@echo "  make benchmark-train    - BPE training (3 libraries, 150K texts)"
 	@echo "  make benchmark-encoding - Native encoding (2 libraries, 60K iterations)"
 	@echo "  make benchmark-web      - Browser (5 libraries, 10K iterations)"
@@ -34,6 +35,15 @@ benchmark-train:
 	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(RESET)"
 	@echo ""
 	@python3 bench_training.py
+	@echo ""
+
+# Quick benchmark (PyAOT vs TokenDagger only - for fast iteration)
+benchmark-quick: build
+	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(RESET)"
+	@echo "$(GREEN)⚡ Quick Benchmark: PyAOT vs TokenDagger (hyperfine)$(RESET)"
+	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(RESET)"
+	@echo ""
+	@./bench_hyperfine.sh
 	@echo ""
 
 # Native encoding benchmarks (PyAOT vs tiktoken - 60K iterations)
@@ -62,6 +72,8 @@ benchmark-web: build-wasm
 build:
 	@echo "$(YELLOW)🔨 Building native tokenizer...$(RESET)"
 	@zig build --release=fast
+	@zig build-exe src/bench_native.zig -O ReleaseFast
+	@mv bench_native zig-out/bin/
 	@echo "$(GREEN)✅ Build complete$(RESET)"
 	@echo ""
 
