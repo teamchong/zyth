@@ -4,3 +4,5 @@ package-lock.json
 *.wasm
 zig-out/
 .zig-cache/
+tokendagger-*/
+*.tar.gz
