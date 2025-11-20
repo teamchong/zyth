@@ -167,8 +167,81 @@ pub fn main() !void {
         return error.RoundtripFailed;
     }
 
-    const encode_start = std.time.nanoTimestamp();
+    // DEBUG: Check what's in vocab
+    std.debug.print("Debugging vocab...\n", .{});
+    std.debug.print("  Vocab size: {}\n", .{tokenizer.vocab.count()});
+    std.debug.print("  Merges count: {}\n", .{tokenizer.merges.items.len});
+
+    // Check if "The " is in vocab
+    const test_str = "The ";
+    if (tokenizer.vocab.get(test_str)) |tok| {
+        std.debug.print("  'The ' found: token {}\n", .{tok});
+    } else {
+        std.debug.print("  'The ' NOT in vocab\n", .{});
+    }
+
+    // Check first few bytes
+    const t_str = "T";
+    if (tokenizer.vocab.get(t_str)) |tok| {
+        std.debug.print("  'T' found: token {}\n", .{tok});
+    } else {
+        std.debug.print("  'T' NOT in vocab\n", .{});
+    }
+
+    std.debug.print("\n", .{});
+
+    // TEST: Compare DP vs Iterative
+    std.debug.print("Testing DP tokenization (greedy longest match)...\n", .{});
+    const dp_tokens = try tokenizer.encode(test_text);
+    defer allocator.free(dp_tokens);
+
+    std.debug.print("  DP tokens: [", .{});
+    for (dp_tokens, 0..) |token, idx| {
+        if (idx > 0) std.debug.print(", ", .{});
+        std.debug.print("{}", .{token});
+        if (idx >= 19) {
+            std.debug.print(", ... ({} more)", .{dp_tokens.len - 20});
+            break;
+        }
+    }
+    std.debug.print("]\n", .{});
+    std.debug.print("  DP token count: {}\n", .{dp_tokens.len});
+    std.debug.print("  Iterative token count: {}\n", .{test_tokens.len});
+
+    // Compare results
+    const dp_matches = std.mem.eql(u32, dp_tokens, test_tokens);
+    std.debug.print("  DP matches iterative: {s}\n\n", .{if (dp_matches) "✅ YES" else "❌ NO"});
+
+    if (!dp_matches) {
+        std.debug.print("  First 10 DP:        [", .{});
+        for (dp_tokens[0..@min(10, dp_tokens.len)], 0..) |t, idx| {
+            if (idx > 0) std.debug.print(", ", .{});
+            std.debug.print("{}", .{t});
+        }
+        std.debug.print("]\n", .{});
+        std.debug.print("  First 10 Iterative: [", .{});
+        for (test_tokens[0..@min(10, test_tokens.len)], 0..) |t, idx| {
+            if (idx > 0) std.debug.print(", ", .{});
+            std.debug.print("{}", .{t});
+        }
+        std.debug.print("]\n\n", .{});
+    }
+
+    // Benchmark both approaches
+    std.debug.print("Benchmarking DP...\n", .{});
+    const dp_start = std.time.nanoTimestamp();
     var i: usize = 0;
+    while (i < iterations) : (i += 1) {
+        const tokens = try tokenizer.encodeHashMap(test_text);
+        allocator.free(tokens);
+    }
+    const dp_end = std.time.nanoTimestamp();
+    const dp_ms = @divFloor(dp_end - dp_start, 1_000_000);
+    std.debug.print("  DP: {} iterations in {}ms\n\n", .{ iterations, dp_ms });
+
+    std.debug.print("Benchmarking Iterative...\n", .{});
+    const encode_start = std.time.nanoTimestamp();
+    i = 0;
     while (i < iterations) : (i += 1) {
         const tokens = try tokenizer.encode(test_text);
         allocator.free(tokens);

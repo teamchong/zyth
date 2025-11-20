@@ -477,12 +477,17 @@ pub const Trainer = struct {
 
         const pattern_str = try self.allocator.dupe(u8, self.pattern_str);
 
+        // Create empty trie (not used for merge-based tokenizers)
+        const TrieNode = @import("tokenizer.zig").TrieNode;
+        const trie = try TrieNode.init(self.allocator);
+
         return Tokenizer{
             .vocab = vocab,
             .vocab_r = vocab_r,
             .merges = merges,
             .merges_map = merges_map,
             .pattern_str = pattern_str,
+            .trie = trie,
             .allocator = self.allocator,
         };
     }

@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
+    "ai-tokenizer": "^1.0.4",
     "gpt-tokenizer": "^2.1.1",
-    "tiktoken": "^1.0.17",
-    "ai-tokenizer": "^1.0.4"
+    "tiktoken": "^1.0.15"
   }
 }

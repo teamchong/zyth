@@ -6,8 +6,8 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Load cl100k_base (SAME as other benchmarks!)
-    var tokenizer = try Tokenizer.init("dist/cl100k_base.json", allocator);
+    // Load cl100k_base
+    var tokenizer = try Tokenizer.init("dist/cl100k_simple.json", allocator);
     defer tokenizer.deinit();
 
     const TEXT = 

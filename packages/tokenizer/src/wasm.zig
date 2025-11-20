@@ -10,18 +10,54 @@ var gpa = std.heap.wasm_allocator;
 var global_tokenizer: ?*Tokenizer = null;
 
 /// Initialize tokenizer from JSON data (called once from JavaScript)
-/// Returns 1 on success, 0 on failure
+/// Returns 1 on success, negative for errors
 export fn initFromData(json_ptr: [*]const u8, json_len: usize) i32 {
     const json_data = json_ptr[0..json_len];
 
-    const tokenizer = Tokenizer.initFromData(json_data, gpa) catch return 0;
+    // Store for debugging
+    last_json_ptr = json_ptr;
+    last_json_len = json_len;
 
-    global_tokenizer = gpa.create(Tokenizer) catch return 0;
-    global_tokenizer.?.* = tokenizer;
+    // Try to parse
+    const tokenizer = Tokenizer.initFromData(json_data, gpa) catch |err| {
+        if (err == error.InvalidJson) return -1;
+        if (err == error.OutOfMemory) return -2;
+        if (err == error.InvalidCharacter) return -3;
+        return -10;
+    };
+
+    // Allocate and store
+    const tok_ptr = gpa.create(Tokenizer) catch return -20;
+    tok_ptr.* = tokenizer;
+    global_tokenizer = tok_ptr;
+
     return 1;
 }
 
-/// Encode text to tokens
+// Store last JSON for debugging
+var last_json_ptr: ?[*]const u8 = null;
+var last_json_len: usize = 0;
+
+/// Debug: get JSON byte at position (for debugging parser)
+export fn debug_get_byte(pos: usize) i32 {
+    if (last_json_ptr) |ptr| {
+        if (pos < last_json_len) {
+            return ptr[pos];
+        }
+    }
+    return -1;
+}
+
+export fn debug_get_json_len() i32 {
+    return @intCast(last_json_len);
+}
+
+/// Test function - returns memory address to verify WASM is working
+export fn test_basic() i32 {
+    return 12345;
+}
+
+/// Encode text to tokens (auto-selects HashMap for WASM - less memory)
 /// Returns pointer to token array in WASM memory
 /// Token count is written to out_len
 export fn encode(text_ptr: [*]const u8, text_len: usize, out_len: *usize) [*]u32 {

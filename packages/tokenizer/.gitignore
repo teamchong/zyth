@@ -6,3 +6,18 @@ zig-out/
 .zig-cache/
 tokendagger-*/
 *.tar.gz
+
+# Test files
+test_*.zig
+test_*.js
+accuracy_test*.py
+
+# Build artifacts
+*.a
+bench_trainer
+bench_cl100k
+test_tokendagger
+bench_tokendagger_pure.c
+
+# Temp files
+temp_spm.*

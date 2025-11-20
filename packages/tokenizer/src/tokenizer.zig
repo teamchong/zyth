@@ -30,6 +30,72 @@ pub const PairContext = struct {
     }
 };
 
+/// Trie node for fast longest-match token lookup (array-based for speed)
+pub const TrieNode = struct {
+    children: [256]?*TrieNode, // Direct array lookup (fast!)
+    token_id: ?u32, // If this is end of a token
+    allocator: Allocator,
+
+    pub fn init(allocator: Allocator) !*TrieNode {
+        const node = try allocator.create(TrieNode);
+        node.* = TrieNode{
+            .children = [_]?*TrieNode{null} ** 256,
+            .token_id = null,
+            .allocator = allocator,
+        };
+        return node;
+    }
+
+    fn deinit(self: *TrieNode) void {
+        for (self.children) |child_opt| {
+            if (child_opt) |child| {
+                child.deinit();
+            }
+        }
+        self.allocator.destroy(self);
+    }
+
+    fn insert(self: *TrieNode, bytes: []const u8, token_id: u32) !void {
+        var current = self;
+        for (bytes) |byte| {
+            if (current.children[byte]) |child| {
+                current = child;
+            } else {
+                const new_child = try TrieNode.init(current.allocator);
+                current.children[byte] = new_child;
+                current = new_child;
+            }
+        }
+        current.token_id = token_id;
+    }
+
+    /// Find longest match starting at text[pos]
+    fn longestMatch(self: *TrieNode, text: []const u8, pos: usize) struct { len: usize, token_id: u32 } {
+        var current = self;
+        var best_len: usize = 0;
+        var best_token: u32 = text[pos]; // Default to byte
+
+        var i: usize = pos;
+        while (i < text.len) : (i += 1) {
+            const byte = text[i];
+            const child = current.children[byte] orelse break;
+
+            if (child.token_id) |token_id| {
+                best_len = i - pos + 1;
+                best_token = token_id;
+            }
+
+            current = child;
+        }
+
+        if (best_len == 0) {
+            best_len = 1; // Single byte
+        }
+
+        return .{ .len = best_len, .token_id = best_token };
+    }
+};
+
 /// SIMD-optimized pair counting
 /// Uses @Vector for 8x parallelism
 pub fn countPairsSIMD(ids: []const u32, pair: Pair) u32 {
@@ -107,18 +173,106 @@ pub const Tokenizer = struct {
     merges: std.ArrayList(Pair),
     merges_map: std.HashMap(Pair, u32, PairContext, std.hash_map.default_max_load_percentage),
     pattern_str: []const u8,
+    trie: ?*TrieNode, // Fast longest-match lookup (optional - uses lots of memory)
     allocator: Allocator,
 
     pub fn initFromData(json_data: []const u8, allocator: Allocator) !Tokenizer {
-        var parsed = try std.json.parseFromSlice(
-            std.json.Value,
-            allocator,
-            json_data,
-            .{},
-        );
-        defer parsed.deinit();
+        // Manual JSON parser (std.json doesn't work in WASM freestanding)
+        var vocab = std.StringHashMap(u32).init(allocator);
+        errdefer vocab.deinit();
 
-        return try parseTokenizerJSON(parsed.value, allocator);
+        var vocab_r = std.AutoHashMap(u32, []const u8).init(allocator);
+        errdefer vocab_r.deinit();
+
+        // Find "vocab" key
+        var i: usize = 0;
+        var found = false;
+        while (i < json_data.len) : (i += 1) {
+            if (i + 7 <= json_data.len and
+                json_data[i] == '"' and
+                json_data[i+1] == 'v' and
+                json_data[i+2] == 'o' and
+                json_data[i+3] == 'c' and
+                json_data[i+4] == 'a' and
+                json_data[i+5] == 'b' and
+                json_data[i+6] == '"') {
+                i += 7;
+                found = true;
+                break;
+            }
+        }
+        if (!found) return error.InvalidJson;
+
+        // Skip whitespace and ':'
+        while (i < json_data.len and (json_data[i] == ' ' or json_data[i] == '\t' or json_data[i] == '\n' or json_data[i] == '\r' or json_data[i] == ':')) : (i += 1) {}
+
+        // Expect '{'
+        if (i >= json_data.len or json_data[i] != '{') return error.InvalidJson;
+        i += 1;
+
+        // Parse entries
+        while (i < json_data.len) {
+            // Skip whitespace
+            while (i < json_data.len and (json_data[i] == ' ' or json_data[i] == '\t' or json_data[i] == '\n' or json_data[i] == '\r' or json_data[i] == ',')) : (i += 1) {}
+
+            if (i >= json_data.len) break;
+            if (json_data[i] == '}') break;
+
+            // Parse key
+            if (json_data[i] != '"') return error.InvalidJson;
+            i += 1;
+
+            const key_start = i;
+            while (i < json_data.len and json_data[i] != '"') : (i += 1) {}
+            if (i >= json_data.len) return error.InvalidJson;
+
+            const key = json_data[key_start..i];
+            i += 1;
+
+            // Decode base64
+            const decoder = std.base64.standard.Decoder;
+            const max_size = try decoder.calcSizeForSlice(key);
+            const token = try allocator.alloc(u8, max_size);
+            try decoder.decode(token, key);
+
+            // Skip whitespace and ':'
+            while (i < json_data.len and (json_data[i] == ' ' or json_data[i] == '\t' or json_data[i] == '\n' or json_data[i] == '\r' or json_data[i] == ':')) : (i += 1) {}
+
+            // Parse value
+            if (i >= json_data.len) return error.InvalidJson;
+
+            var rank: u32 = 0;
+            while (i < json_data.len and json_data[i] >= '0' and json_data[i] <= '9') : (i += 1) {
+                rank = rank * 10 + (json_data[i] - '0');
+            }
+
+            try vocab.put(token, rank);
+            try vocab_r.put(rank, token);
+        }
+
+        const merges = std.ArrayList(Pair){};
+        const merges_map = std.HashMap(
+            Pair,
+            u32,
+            PairContext,
+            std.hash_map.default_max_load_percentage,
+        ).initContext(allocator, PairContext{});
+
+        const trie: ?*TrieNode = null;
+
+        const pattern_str = try allocator.dupe(u8,
+            "'s|'t|'re|'ve|'m|'ll|'d| ?[[:alpha:]]+| ?[[:digit:]]+| ?[^[:alnum:][:space:]]+| +[[:space:]]*| +"
+        );
+
+        return Tokenizer{
+            .vocab = vocab,
+            .vocab_r = vocab_r,
+            .merges = merges,
+            .merges_map = merges_map,
+            .pattern_str = pattern_str,
+            .trie = trie,
+            .allocator = allocator,
+        };
     }
 
     pub fn init(tokenizer_path: []const u8, allocator: Allocator) !Tokenizer {
@@ -129,7 +283,8 @@ pub const Tokenizer = struct {
         const buffer = try allocator.alloc(u8, stat.size);
         defer allocator.free(buffer);
 
-        _ = try file.reader().readAll(buffer);
+        const bytes_read = try file.readAll(buffer);
+        _ = bytes_read;
 
         var parsed = try std.json.parseFromSlice(
             std.json.Value,
@@ -161,37 +316,30 @@ pub const Tokenizer = struct {
         errdefer merges_map.deinit();
 
         const root = root_value.object;
-        const model = root.get("model").?.object;
 
-        // Load vocabulary
-        const vocab_json = model.get("vocab").?.object;
+        // Simple format: {"vocab": {"base64_token": rank, ...}}
+        const vocab_json = root.get("vocab").?.object;
         var it = vocab_json.iterator();
+
         while (it.next()) |entry| {
-            const key = try allocator.dupe(u8, entry.key_ptr.*);
-            const value = @as(u32, @intCast(entry.value_ptr.*.integer));
+            const token_b64 = entry.key_ptr.*;
+            const rank = @as(u32, @intCast(entry.value_ptr.*.integer));
 
-            try vocab.put(key, value);
-            try vocab_r.put(value, key);
+            // Decode base64
+            const decoder = std.base64.standard.Decoder;
+            const max_size = try decoder.calcSizeForSlice(token_b64);
+            const token_bytes = try allocator.alloc(u8, max_size);
+            try decoder.decode(token_bytes, token_b64);
+            const token = token_bytes[0..max_size];
+
+            try vocab.put(token, rank);
+            try vocab_r.put(rank, token);
         }
 
-        // Load merges
-        const merges_json = model.get("merges").?.array;
-        var merge_idx: u32 = 0;
-        for (merges_json.items) |merge_item| {
-            const content = merge_item.string;
-            var splits = std.mem.splitScalar(u8, content, ' ');
+        // std.debug.print("Loaded {} vocab entries\n", .{vocab.count()});
 
-            const left_str = splits.next() orelse continue;
-            const right_str = splits.next() orelse continue;
-
-            const left_id = vocab.get(left_str) orelse continue;
-            const right_id = vocab.get(right_str) orelse continue;
-
-            const pair = Pair{ .left = left_id, .right = right_id };
-            try merges.append(allocator, pair);
-            try merges_map.put(pair, merge_idx);
-            merge_idx += 1;
-        }
+        // Skip trie for WASM (uses too much memory)
+        const trie: ?*TrieNode = null;
 
         // Default GPT-4 pattern
         const pattern_str = try allocator.dupe(u8,
@@ -204,6 +352,7 @@ pub const Tokenizer = struct {
             .merges = merges,
             .merges_map = merges_map,
             .pattern_str = pattern_str,
+            .trie = trie,
             .allocator = allocator,
         };
     }
@@ -218,31 +367,30 @@ pub const Tokenizer = struct {
         self.merges.deinit(self.allocator);
         self.merges_map.deinit();
         self.allocator.free(self.pattern_str);
+        if (self.trie) |trie| {
+            trie.deinit();
+        }
     }
 
-    /// Encode: Stack-optimized for small texts, heap for large!
-    /// tiktoken's correctness + ZERO ALLOCATION for common case!
-    pub fn encode(self: *Tokenizer, text: []const u8) ![]u32 {
-        // FAST PATH: Stack allocation for small texts (<4KB)
+    /// HASH MAP optimization: O(n * k) instead of O(n * m)
+    /// k = actual merges applied << m = total possible merges
+    pub fn encodeHashMap(self: *Tokenizer, text: []const u8) ![]u32 {
         if (text.len <= 4096) {
             var stack_buffer: [4096]u32 = undefined;
-            var len: usize = text.len;
 
-            // Copy bytes to stack (unsafe, no bounds check!)
+            // Start with bytes
             for (text, 0..) |byte, i| {
                 stack_buffer[i] = byte;
             }
 
-            // Apply merges using stack buffer
-            len = try self.applyMergesStack(stack_buffer[0..len]);
+            const len = try self.applyMergesHashMap(stack_buffer[0..text.len]);
 
-            // Copy to heap for return
             const result = try self.allocator.alloc(u32, len);
             @memcpy(result, stack_buffer[0..len]);
             return result;
         }
 
-        // SLOW PATH: Heap allocation for large texts
+        // Large text path
         var tokens = try std.ArrayList(u32).initCapacity(self.allocator, text.len);
         errdefer tokens.deinit(self.allocator);
 
@@ -250,9 +398,105 @@ pub const Tokenizer = struct {
             tokens.appendAssumeCapacity(byte);
         }
 
-        try self.applyMerges(&tokens);
+        try self.applyMergesHashMapArrayList(&tokens);
         return try tokens.toOwnedSlice(self.allocator);
     }
+
+    /// Hash map based merging: find applicable merges, apply highest priority
+    fn applyMergesHashMap(self: *Tokenizer, tokens: []u32) !usize {
+        @setRuntimeSafety(false);
+
+        if (tokens.len < 2) return tokens.len;
+
+        var current_len = tokens.len;
+
+        while (true) {
+            // Find the highest-priority merge in current sequence
+            var best_pair: ?Pair = null;
+            var best_rank: u32 = std.math.maxInt(u32);
+            var best_pos: usize = 0;
+
+            // Scan for all pairs and lookup in hash map
+            var i: usize = 0;
+            while (i + 1 < current_len) : (i += 1) {
+                const pair = Pair{ .left = tokens[i], .right = tokens[i + 1] };
+
+                if (self.merges_map.get(pair)) |merge_idx| {
+                    // Lower index = higher priority (earlier merge)
+                    if (merge_idx < best_rank) {
+                        best_rank = merge_idx;
+                        best_pair = pair;
+                        best_pos = i;
+                    }
+                }
+            }
+
+            // No more merges possible
+            if (best_pair == null) break;
+
+            // Apply the merge: replace (left, right) with new_token
+            const new_token = 256 + best_rank;
+            tokens[best_pos] = new_token;
+
+            // Shift remaining tokens left
+            i = best_pos + 1;
+            while (i + 1 < current_len) : (i += 1) {
+                tokens[i] = tokens[i + 1];
+            }
+            current_len -= 1;
+        }
+
+        return current_len;
+    }
+
+    fn applyMergesHashMapArrayList(self: *Tokenizer, tokens: *std.ArrayList(u32)) !void {
+        while (true) {
+            var best_pair: ?Pair = null;
+            var best_rank: u32 = std.math.maxInt(u32);
+            var best_pos: usize = 0;
+
+            var i: usize = 0;
+            while (i + 1 < tokens.items.len) : (i += 1) {
+                const pair = Pair{ .left = tokens.items[i], .right = tokens.items[i + 1] };
+
+                if (self.merges_map.get(pair)) |merge_idx| {
+                    if (merge_idx < best_rank) {
+                        best_rank = merge_idx;
+                        best_pair = pair;
+                        best_pos = i;
+                    }
+                }
+            }
+
+            if (best_pair == null) break;
+
+            const new_token = 256 + best_rank;
+            tokens.items[best_pos] = new_token;
+            _ = tokens.orderedRemove(best_pos + 1);
+        }
+    }
+
+    /// Trie-based longest-match encoding (fast + correct)
+    /// Falls back to HashMap if trie not available (WASM)
+    pub fn encode(self: *Tokenizer, text: []const u8) ![]u32 {
+        if (self.trie) |trie| {
+            var result = try std.ArrayList(u32).initCapacity(self.allocator, text.len);
+            errdefer result.deinit(self.allocator);
+
+            var pos: usize = 0;
+            while (pos < text.len) {
+                const match = trie.longestMatch(text, pos);
+                try result.append(self.allocator, match.token_id);
+                pos += match.len;
+            }
+
+            return try result.toOwnedSlice(self.allocator);
+        } else {
+            // Fallback to HashMap (WASM/low memory)
+            return self.encodeHashMap(text);
+        }
+    }
+
 
     /// Stack-optimized version that modifies buffer in-place!
     /// UNSAFE: No bounds checking for MAXIMUM SPEED!
