@@ -109,6 +109,18 @@ pub const Tokenizer = struct {
     pattern_str: []const u8,
     allocator: Allocator,
 
+    pub fn initFromData(json_data: []const u8, allocator: Allocator) !Tokenizer {
+        var parsed = try std.json.parseFromSlice(
+            std.json.Value,
+            allocator,
+            json_data,
+            .{},
+        );
+        defer parsed.deinit();
+
+        return try parseTokenizerJSON(parsed.value, allocator);
+    }
+
     pub fn init(tokenizer_path: []const u8, allocator: Allocator) !Tokenizer {
         const file = try std.fs.cwd().openFile(tokenizer_path, .{});
         defer file.close();
@@ -127,6 +139,10 @@ pub const Tokenizer = struct {
         );
         defer parsed.deinit();
 
+        return try parseTokenizerJSON(parsed.value, allocator);
+    }
+
+    fn parseTokenizerJSON(root_value: std.json.Value, allocator: Allocator) !Tokenizer {
         var vocab = std.StringHashMap(u32).init(allocator);
         errdefer vocab.deinit();
 
@@ -144,7 +160,7 @@ pub const Tokenizer = struct {
         ).initContext(allocator, PairContext{});
         errdefer merges_map.deinit();
 
-        const root = parsed.value.object;
+        const root = root_value.object;
         const model = root.get("model").?.object;
 
         // Load vocabulary

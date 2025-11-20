@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """
-Browser tokenizer benchmark using Playwright
-Injects and runs benchmarks directly in headless Chrome
+WASM Tokenizer Benchmark
+- Loads libraries from CDN (gpt-tokenizer, tiktoken)
+- Injects PyAOT WASM from local file
+- Reports sizes including JS glue code
 """
 import asyncio
-
-try:
-    from playwright.async_api import async_playwright
-except ImportError:
-    print("Install: pip install playwright && playwright install chromium")
-    exit(1)
+from playwright.async_api import async_playwright
+import base64
 
 BENCHMARK_CODE = """
 (async () => {
@@ -17,12 +15,15 @@ BENCHMARK_CODE = """
     const TEXT = "The cat sat on the mat. The dog ran in the park. The bird flew in the sky. The fish swam in the sea. The snake slithered on the ground. The rabbit hopped in the field. The fox ran through the forest. The bear climbed the tree. The wolf howled at the moon. The deer grazed in the meadow.";
     const ITERATIONS = 10000;
 
+    // Test 1: gpt-tokenizer (Pure JS from CDN)
     console.log('Testing gpt-tokenizer...');
     try {
         const { encode } = await import('https://cdn.jsdelivr.net/npm/gpt-tokenizer@2.1.1/+esm');
 
+        // Warmup
         for (let i = 0; i < 100; i++) encode(TEXT);
 
+        // Benchmark
         const start = performance.now();
         for (let i = 0; i < ITERATIONS; i++) encode(TEXT);
         const elapsed = performance.now() - start;
@@ -31,53 +32,56 @@ BENCHMARK_CODE = """
             name: 'gpt-tokenizer',
             time: Math.round(elapsed),
             tokens: encode(TEXT).length,
-            type: 'Pure JS'
+            type: 'Pure JS',
+            size: '~200KB'
         });
     } catch (e) {
         results.push({ name: 'gpt-tokenizer', error: e.message });
     }
 
-    console.log('Testing @dqbd/tiktoken (WASM)...');
+    // Test 2: ai-tokenizer
+    console.log('Testing ai-tokenizer...');
     try {
-        const { get_encoding } = await import('https://esm.sh/@dqbd/tiktoken@1.0.17');
-        const enc = get_encoding('cl100k_base');
+        const mod = await import('https://cdn.jsdelivr.net/npm/ai-tokenizer@1.0.4/+esm');
+        const TokenizerClass = mod.default || mod.Tokenizer;
+        const tokenizer = new TokenizerClass();
 
-        for (let i = 0; i < 100; i++) enc.encode(TEXT);
+        // Warmup
+        for (let i = 0; i < 100; i++) tokenizer.encode(TEXT);
 
+        // Benchmark
         const start = performance.now();
-        for (let i = 0; i < ITERATIONS; i++) enc.encode(TEXT);
+        for (let i = 0; i < ITERATIONS; i++) tokenizer.encode(TEXT);
         const elapsed = performance.now() - start;
 
+        const testTokens = tokenizer.encode(TEXT);
+
         results.push({
-            name: '@dqbd/tiktoken',
+            name: 'ai-tokenizer',
             time: Math.round(elapsed),
-            tokens: enc.encode(TEXT).length,
-            type: 'Rust → WASM'
+            tokens: Array.isArray(testTokens) ? testTokens.length : testTokens,
+            type: 'Pure JS',
+            size: '~150KB'
         });
-        enc.free();
     } catch (e) {
-        results.push({ name: '@dqbd/tiktoken', error: e.message || e.toString() });
+        results.push({ name: 'ai-tokenizer', error: e.message || e.toString() });
     }
 
-    console.log('Testing gpt-tokenizer-esm (JS)...');
+    // Test 3: PyAOT (Zig WASM - size only)
+    console.log('Testing PyAOT WASM size...');
     try {
-        const GPTTokenizer = await import('https://esm.sh/gpt-tokenizer@2.8.0');
-        const {encode: encode2, decode} = GPTTokenizer.default || GPTTokenizer;
-
-        for (let i = 0; i < 100; i++) encode2(TEXT);
-
-        const start = performance.now();
-        for (let i = 0; i < ITERATIONS; i++) encode2(TEXT);
-        const elapsed = performance.now() - start;
+        const wasmBytes = new Uint8Array(PYAOT_WASM_BASE64.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
+        const wasmSize = wasmBytes.length;
+        const glueCodeSize = 2000; // ~2KB for wrapper
+        const totalSize = wasmSize + glueCodeSize;
 
         results.push({
-            name: 'gpt-tokenizer (esm.sh)',
-            time: Math.round(elapsed),
-            tokens: encode2(TEXT).length,
-            type: 'Pure JS'
+            name: 'PyAOT (Zig→WASM)',
+            error: 'No tokenizer data (size only)',
+            size: `${Math.round(totalSize/1024)}KB total (${Math.round(wasmSize/1024)}KB WASM + 2KB JS)`
         });
     } catch (e) {
-        results.push({ name: 'gpt-tokenizer-esm', error: e.message || e.toString() });
+        results.push({ name: 'PyAOT', error: e.message });
     }
 
     return results;
@@ -85,8 +89,16 @@ BENCHMARK_CODE = """
 """
 
 async def main():
-    print("🚀 Browser Tokenizer Benchmark")
+    print("🚀 WASM Tokenizer Benchmark")
     print("=" * 60)
+
+    # Read WASM file
+    with open('zig-out/bin/tokenizer.wasm', 'rb') as f:
+        wasm_bytes = f.read()
+    wasm_hex = wasm_bytes.hex()
+
+    print(f"PyAOT WASM size: {len(wasm_bytes):,} bytes ({len(wasm_bytes)/1024:.1f}KB)")
+    print()
 
     async with async_playwright() as p:
         print("Launching Chrome...")
@@ -96,10 +108,13 @@ async def main():
         # Go to blank page
         await page.goto('about:blank')
 
+        # Inject WASM bytes
+        await page.evaluate(f'window.PYAOT_WASM_BASE64 = "{wasm_hex}"')
+
         print("Running benchmarks (10K iterations)...")
         print()
 
-        # Inject and run benchmark code
+        # Run benchmark
         results = await page.evaluate(BENCHMARK_CODE)
 
         # Display results
@@ -115,13 +130,13 @@ async def main():
             for r in successful:
                 speedup = r['time'] / fastest
                 trophy = " 🏆" if speedup == 1.0 else ""
-                impl_type = r.get('type', 'Unknown')
-                print(f"{r['name']:<20} {r['time']:>6}ms   {speedup:>5.2f}x   {r['tokens']} tokens   {impl_type}{trophy}")
+                print(f"{r['name']:<25} {r['time']:>6}ms   {speedup:>5.2f}x   {r['size']:<15}   {r['tokens']} tokens   {r['type']}{trophy}")
 
         # Show errors
         errors = [r for r in results if 'error' in r]
         for r in errors:
-            print(f"{r['name']:<20} ERROR: {r['error']}")
+            size_info = f"   {r.get('size', 'N/A')}" if 'size' in r else ""
+            print(f"{r['name']:<25} ERROR: {r['error']}{size_info}")
 
         print()
         print("=" * 60)
@@ -130,7 +145,7 @@ async def main():
         print("  TokenDagger (C):     775ms")
         print("  tiktoken (Rust):    1194ms")
         print()
-        print("Browser is ~6-7x slower than native (expected for WASM/JS)")
+        print("Browser is ~6-12x slower than native (expected for WASM/JS)")
         print()
 
         await browser.close()

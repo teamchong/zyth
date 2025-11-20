@@ -9,15 +9,15 @@ var gpa = std.heap.wasm_allocator;
 // Global tokenizer instance
 var global_tokenizer: ?*Tokenizer = null;
 
-/// Initialize tokenizer (called once from JavaScript)
+/// Initialize tokenizer from JSON data (called once from JavaScript)
 /// Returns 1 on success, 0 on failure
-export fn init(vocab_ptr: [*]const u8, vocab_len: usize, merges_ptr: [*]const u8, merges_len: usize) i32 {
-    const vocab_json = vocab_ptr[0..vocab_len];
-    const merges_txt = merges_ptr[0..merges_len];
+export fn initFromData(json_ptr: [*]const u8, json_len: usize) i32 {
+    const json_data = json_ptr[0..json_len];
 
-    const tokenizer = Tokenizer.init(gpa, vocab_json, merges_txt) catch return 0;
+    const tokenizer = Tokenizer.initFromData(json_data, gpa) catch return 0;
 
-    global_tokenizer = tokenizer;
+    global_tokenizer = gpa.create(Tokenizer) catch return 0;
+    global_tokenizer.?.* = tokenizer;
     return 1;
 }
 

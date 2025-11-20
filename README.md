@@ -160,6 +160,23 @@ All benchmarks run ~60 seconds on CPython for statistical significance.
 - **Startup:** 20x faster instant binary execution
 - **Range:** 8-40x speedup vs CPython depending on workload
 
+### Tokenizer Benchmark (Native Binary)
+
+Benchmarked with hyperfine (5 runs, 60K iterations, 286-byte text, Apple M2):
+
+| Implementation | Time (mean ± σ) | vs PyAOT |
+|---------------|-----------------|----------|
+| **PyAOT (Zig)** | **741ms ± 6ms** | **1.00x** 🏆 |
+| TokenDagger (C) | 775ms ± 12ms | 1.05x |
+| tiktoken (Rust) | 1194ms ± 33ms | 1.61x |
+| HuggingFace (Rust) | 5240ms ± 97ms | 7.07x |
+| Rust rustbpe | 9550ms | 12.9x |
+
+**Browser (10K iterations, Chrome headless):**
+- gpt-tokenizer (Pure JS): 887ms
+
+PyAOT's tokenizer beats C by 4.4% and Rust by 61%.
+
 **Why PyAOT is faster:**
 - Direct compilation to native machine code via Zig (no interpreter)
 - Eliminates Python interpreter overhead completely
