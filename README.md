@@ -177,16 +177,19 @@ All benchmarks run with [hyperfine](https://github.com/sharkdp/hyperfine) on App
 | Implementation | Time | vs Fastest | Correctness |
 |---------------|------|------------|-------------|
 | **rs-bpe (Rust)** | **462ms** | **1.00x** 🏆 | ✅ 100% |
+| TokenDagger (C) | ❌ Build failed | - | - |
 | tiktoken (Rust) | 1060ms | 2.29x slower | ✅ 100% |
 | HuggingFace (Python) | 5270ms | 11.40x slower | ✅ 100% |
 | PyAOT (Zig) | ⏳ Too slow | - | ✅ 100% correct |
 
 **Web/Node.js Encoding (583 texts × 100 iterations):**
 
-| Library | Time | vs Fastest |
-|---------|------|------------|
-| **gpt-tokenizer (JS)** | **512ms** | **1.00x** 🏆 |
-| tiktoken (Node) | 6210ms | 12.13x slower |
+| Library | Time | vs Fastest | Status |
+|---------|------|------------|--------|
+| **gpt-tokenizer (JS)** | **512ms** | **1.00x** 🏆 | ✅ Works |
+| @anthropic-ai/tokenizer (JS) | >10min | >1000x slower | ⚠️ Too slow |
+| tiktoken (Node) | 6210ms | 12.13x slower | ✅ Works |
+| PyAOT (WASM) | - | - | ❌ JSON init failing |
 
 **Current Status:**
 - ✅ **Training**: Competitive (2.33x slower than fastest)

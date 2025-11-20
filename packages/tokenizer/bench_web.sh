@@ -16,16 +16,17 @@ if [ ! -f benchmark_data.json ]; then
 fi
 
 # Make scripts executable
-chmod +x bench_web_gpt.js bench_web_tiktoken.js
+chmod +x bench_web_gpt.js bench_web_ai.js bench_web_tiktoken.js
 
-echo "⚠️  Skipping @anthropic-ai/tokenizer - too slow (>5min for this benchmark)"
+echo "⚠️  Note: PyAOT WASM initialization failing (JSON parsing issue) - needs debugging"
 echo ""
 
-# Run hyperfine
+# Run hyperfine with 3 working libraries
 hyperfine \
     --warmup 1 \
     --runs 5 \
     --export-markdown bench_web_results.md \
+    --command-name "@anthropic-ai/tokenizer (JS)" 'node bench_web_ai.js' \
     --command-name "gpt-tokenizer (JS)" 'node bench_web_gpt.js' \
     --command-name "tiktoken (Node)" 'node bench_web_tiktoken.js'
 
