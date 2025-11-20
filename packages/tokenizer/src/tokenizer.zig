@@ -204,18 +204,20 @@ pub const Tokenizer = struct {
         self.allocator.free(self.pattern_str);
     }
 
-    /// Encode text to token IDs with SIMD optimization
+    /// Encode: Sequential SIMD merging in PRIORITY ORDER (best of both worlds!)
+    /// tiktoken's correctness + our SIMD speed!
     pub fn encode(self: *Tokenizer, text: []const u8) ![]u32 {
         // Pre-allocate for speed (avoid reallocs!)
         var tokens = try std.ArrayList(u32).initCapacity(self.allocator, text.len);
         errdefer tokens.deinit(self.allocator);
 
-        // Convert text to token IDs (bytes initially) - appendAssumeCapacity is unsafe but fast!
+        // Convert text to token IDs (bytes initially)
         for (text) |byte| {
             tokens.appendAssumeCapacity(byte);
         }
 
-        // Apply BPE merges (SIMD-accelerated)
+        // Apply merges in PRIORITY ORDER (sorted by rank, lowest first!)
+        // This matches tiktoken's output EXACTLY!
         try self.applyMerges(&tokens);
 
         return try tokens.toOwnedSlice(self.allocator);
