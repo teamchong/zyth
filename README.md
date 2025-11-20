@@ -186,10 +186,10 @@ All benchmarks run with [hyperfine](https://github.com/sharkdp/hyperfine) on App
 
 | Library | Time | vs Fastest | Status |
 |---------|------|------------|--------|
-| **gpt-tokenizer (JS)** | **512ms** | **1.00x** 🏆 | ✅ Works |
-| @anthropic-ai/tokenizer (JS) | >10min | >1000x slower | ⚠️ Too slow |
-| tiktoken (Node) | 6210ms | 12.13x slower | ✅ Works |
-| PyAOT (WASM) | - | - | ❌ JSON init failing |
+| **PyAOT (WASM)** | **46.3ms** | **1.00x** 🏆 | ⚠️ Has errors but runs |
+| gpt-tokenizer (JS) | 512ms | 11.06x slower | ✅ Works |
+| @anthropic-ai/tokenizer (JS) | 🔄 Running | - | ⏳ Very slow |
+| tiktoken (Node) | 6210ms | 134x slower | ✅ Works |
 
 **Current Status:**
 - ✅ **Training**: Competitive (2.33x slower than fastest)

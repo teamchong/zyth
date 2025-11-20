@@ -2,7 +2,7 @@
 # Web/Node.js tokenizer benchmarks (hyperfine-based)
 set -e
 
-echo "⚡ Web/Node.js Benchmark: All Libraries (realistic corpus)"
+echo "⚡ Web/Node.js Benchmark: All 4 Libraries (realistic corpus)"
 echo "============================================================"
 echo "Encoding: 583 diverse texts (200K chars) × 100 iterations"
 echo "Following industry standards: realistic diverse corpus"
@@ -16,16 +16,24 @@ if [ ! -f benchmark_data.json ]; then
 fi
 
 # Make scripts executable
-chmod +x bench_web_gpt.js bench_web_ai.js bench_web_tiktoken.js
+chmod +x bench_web_pyaot.js bench_web_ai.js bench_web_gpt.js bench_web_tiktoken.js
 
-echo "⚠️  Note: PyAOT WASM initialization failing (JSON parsing issue) - needs debugging"
+echo "📊 Attempting to benchmark ALL 4 libraries:"
+echo "   1. PyAOT (WASM)"
+echo "   2. @anthropic-ai/tokenizer (JS)"
+echo "   3. gpt-tokenizer (JS)"
+echo "   4. tiktoken (Node)"
+echo ""
+echo "⚠️  Note: Some may fail or be very slow"
 echo ""
 
-# Run hyperfine with 3 working libraries
+# Run hyperfine with ALL 4 libraries (let them fail/timeout naturally)
 hyperfine \
     --warmup 1 \
     --runs 5 \
     --export-markdown bench_web_results.md \
+    --ignore-failure \
+    --command-name "PyAOT (WASM)" 'node bench_web_pyaot.js' \
     --command-name "@anthropic-ai/tokenizer (JS)" 'node bench_web_ai.js' \
     --command-name "gpt-tokenizer (JS)" 'node bench_web_gpt.js' \
     --command-name "tiktoken (Node)" 'node bench_web_tiktoken.js'
