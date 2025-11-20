@@ -6,20 +6,6 @@ Python to Zig AOT compiler. Write Python, run native code.
 
 **Up to 27x faster** than CPython | Native binaries | Zero runtime overhead
 
-## 🏆 Tokenizer Benchmark - World's Fastest!
-
-Our pure Zig BPE tokenizer beats ALL competitors including C and Rust!
-
-| Implementation | Time (60K iters) | vs PyAOT | Status |
-|---------------|------------------|----------|--------|
-| **PyAOT (Zig)** | **820ms** | **1.00x** | **#1 🏆** |
-| TokenDagger (C) | ~850ms | 1.04x | PCRE2 + C |
-| HuggingFace (Rust) | ~990ms | 1.21x | Rust lib |
-| tiktoken (Rust) | 1031ms | 1.26x | Official OpenAI |
-| rustbpe (Rust) | 9550ms | 11.6x | Pure Rust |
-
-**Proven: Zig = C = Rust for performance!** See `packages/tokenizer/` for details.
-
 ## Quick Start
 
 ```bash
