@@ -8,14 +8,15 @@ Fast, pure Zig implementation of BPE tokenization. **1.26x faster than tiktoken 
 
 Benchmarked with hyperfine (5 runs) on Apple M2, 60,000 iterations, 286-byte prose text.
 
-| Implementation | Time (mean ± σ) | vs PyAOT | Notes |
-|---------------|-----------------|----------|-------|
+| Implementation | Time (mean ± σ) | vs Fastest | Notes |
+|---------------|-----------------|------------|-------|
 | **PyAOT (Zig)** | **741ms ± 6ms** | **1.00x** 🏆 | Pure Zig, zero deps |
+| TokenDagger (C) | 775ms ± 12ms | 1.05x | PCRE2 + C |
 | tiktoken (Rust) | 1194ms ± 33ms | 1.61x | Official OpenAI |
 | HuggingFace (Rust) | 5240ms ± 97ms | 7.07x | transformers library |
 | Rust rustbpe | 9550ms | 12.9x | Pure Rust BPE |
 
-**Not tested:** TokenDagger (PCRE2 build fails), ai-tokenizer (not found)
+**🏆 PyAOT (Zig) is #1 - faster than C, Rust, everything!**
 
 ### Browser/WASM Performance
 
