@@ -1,17 +1,18 @@
-.PHONY: help build install verify test test-zig format-zig lint-zig clean run benchmark
+.PHONY: help build install verify test test-zig test-correctness-full format-zig lint-zig clean run benchmark
 
 help:
 	@echo "PyAOT Commands"
 	@echo "============="
-	@echo "install        - Build optimized binary and install to ~/.local/bin (RECOMMENDED)"
-	@echo "build          - Build debug binary for development"
-	@echo "build-release  - Build optimized production binary"
-	@echo "verify         - Verify installation is working"
-	@echo "test           - Run pytest regression tests"
-	@echo "test-zig       - Run Zig runtime tests"
-	@echo "format-zig     - Format Zig code"
-	@echo "lint-zig       - Check Zig code formatting"
-	@echo "clean          - Remove build artifacts"
+	@echo "install                 - Build optimized binary and install to ~/.local/bin (RECOMMENDED)"
+	@echo "build                   - Build debug binary for development"
+	@echo "build-release           - Build optimized production binary"
+	@echo "verify                  - Verify installation is working"
+	@echo "test                    - Run pytest regression tests"
+	@echo "test-zig                - Run Zig runtime tests"
+	@echo "test-correctness-full   - Run comprehensive BPE correctness tests (583+ tests)"
+	@echo "format-zig              - Format Zig code"
+	@echo "lint-zig                - Check Zig code formatting"
+	@echo "clean                   - Remove build artifacts"
 
 build:
 	@echo "🔨 Building pyaot compiler (debug mode)..."
@@ -53,6 +54,12 @@ test-zig:
 	@echo "🧪 Running Zig runtime tests..."
 	zig test packages/runtime/src/runtime.zig
 	@echo "✅ Zig runtime tests passed"
+
+test-correctness-full:
+	@echo "🔍 Running comprehensive BPE correctness tests..."
+	@command -v python3 >/dev/null 2>&1 || { echo "❌ Error: python3 not installed"; exit 1; }
+	@chmod +x test_comprehensive_correctness.py
+	python3 test_comprehensive_correctness.py
 
 format-zig:
 	@echo "🎨 Formatting Zig code..."
