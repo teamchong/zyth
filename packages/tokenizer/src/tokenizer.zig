@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const BacktrackEncoder = @import("backtrack_encoder.zig").BacktrackEncoder;
 
 /// A byte pair in the BPE vocabulary
 pub const Pair = struct {
@@ -606,11 +607,24 @@ pub const Tokenizer = struct {
     /// Trie-based longest-match encoding (fast + correct)
     /// Falls back to HashMap if trie not available (WASM)
     pub fn encode(self: *Tokenizer, text: []const u8) ![]u32 {
-        // Use heap-based bitfield encoder (rs-bpe algorithm)
-        // return self.encodeHeapBitfield(text);
+        // Backtrack encoder is still BROKEN (0.8% correct) - needs debugging
+        // return self.encodeBacktrack(text);
 
-        // TEMPORARY: Use old algorithm for debugging
+        // Using HashMap encoder (slow but somewhat correct)
         return self.encodeHashMap(text);
+    }
+
+    /// Backtracking encoder - rs-bpe algorithm
+    fn encodeBacktrack(self: *Tokenizer, text: []const u8) ![]u32 {
+        var encoder = try BacktrackEncoder.init(
+            self.allocator,
+            text,
+            &self.vocab,
+            &self.vocab_r,
+        );
+        defer encoder.deinit();
+
+        return try encoder.encode();
     }
 
     /// Heap-based bitfield encoder (rs-bpe algorithm)
