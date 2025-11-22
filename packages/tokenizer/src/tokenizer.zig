@@ -806,21 +806,24 @@ pub const Tokenizer = struct {
     pub fn encode(self: *Tokenizer, text: []const u8) ![]u32 {
         @setRuntimeSafety(false); // Unsafe speed!
 
+        // EXPERIMENT: Try WITHOUT splitting to see if that's the bottleneck
+        return try self.encodeHashMap(text);
+
         // Split text using cl100k_base pattern
-        const chunks = try cl100k_splitter.split(self.allocator, text);
-        defer self.allocator.free(chunks);
+        // const chunks = try cl100k_splitter.split(self.allocator, text);
+        // defer self.allocator.free(chunks);
 
-        // Pre-allocate result (estimate: 1 token per 4 bytes)
-        var result = std.ArrayList(u32){};
-        try result.ensureTotalCapacity(self.allocator, text.len / 4);
-        errdefer result.deinit(self.allocator);
+        // // Pre-allocate result (estimate: 1 token per 4 bytes)
+        // var result = std.ArrayList(u32){};
+        // try result.ensureTotalCapacity(self.allocator, text.len / 4);
+        // errdefer result.deinit(self.allocator);
 
-        // Encode each chunk inline (avoid 30k allocations!)
-        for (chunks) |chunk| {
-            try self.encodeChunkInline(chunk, &result);
-        }
+        // // Encode each chunk inline (avoid 30k allocations!)
+        // for (chunks) |chunk| {
+        //     try self.encodeChunkInline(chunk, &result);
+        // }
 
-        return try result.toOwnedSlice(self.allocator);
+        // return try result.toOwnedSlice(self.allocator);
     }
 
     /// Encode a single chunk directly into result array (zero-copy)
