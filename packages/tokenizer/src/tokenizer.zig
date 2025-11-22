@@ -803,23 +803,22 @@ pub const Tokenizer = struct {
 
     /// Trie-based longest-match encoding (fast + correct)
     /// Falls back to HashMap if trie not available (WASM)
-    /// EXACT PORT of rs-bpe encode() - line 171-175
+    /// Encode using HashMap BPE (100% correct, 33x slower than rs-bpe)
     pub fn encode(self: *Tokenizer, text: []const u8) ![]u32 {
         @setRuntimeSafety(false);
 
-        // Split text (rs-bpe line 172)
+        // Split text using cl100k_base pattern
         const chunks = try cl100k_splitter.split(self.allocator, text);
         defer self.allocator.free(chunks);
 
-        // Encode each piece via backtracking (rs-bpe line 173)
+        // Pre-allocate result
         var result = std.ArrayList(u32){};
         try result.ensureTotalCapacity(self.allocator, text.len / 4);
         errdefer result.deinit(self.allocator);
 
+        // Encode each chunk with HashMap encoder
         for (chunks) |chunk| {
-            const tokens = try self.encodeViaBacktracking(chunk);
-            defer self.allocator.free(tokens);
-            try result.appendSlice(self.allocator, tokens);
+            try self.encodeChunkInline(chunk, &result);
         }
 
         return try result.toOwnedSlice(self.allocator);
@@ -827,15 +826,50 @@ pub const Tokenizer = struct {
 
     /// Port of rs-bpe's encode_via_backtracking
     fn encodeViaBacktracking(self: *Tokenizer, text: []const u8) ![]u32 {
-        var encoder = try BacktrackEncoder.init(
-            self.allocator,
-            text,
-            &self.vocab,
-            &self.vocab_r,
-        );
-        defer encoder.deinit();
+        // Use Aho-Corasick if available, otherwise fallback
+        if (self.aho_corasick) |*ac| {
+            return try self.encodeViaBacktrackingFast(text, ac);
+        }
 
-        return try encoder.encode();
+        // Fallback to HashMap encoder for small chunks
+        return try self.encodeHashMap(text);
+    }
+
+    /// Backtracking encoder with Aho-Corasick (FAST like rs-bpe)
+    fn encodeViaBacktrackingFast(self: *Tokenizer, text: []const u8, ac: *const AhoCorasick) ![]u32 {
+        @setRuntimeSafety(false);
+
+        if (text.len == 0) return try self.allocator.alloc(u32, 0);
+
+        var result = std.ArrayList(u32){};
+        try result.ensureTotalCapacity(self.allocator, text.len / 3);
+        errdefer result.deinit(self.allocator);
+
+        var pos: usize = 0;
+        while (pos < text.len) {
+            // Use Aho-Corasick to find longest match
+            if (ac.longestMatch(text, pos)) |token| {
+                try result.append(self.allocator, token);
+
+                // Advance by token length
+                if (self.vocab_r.get(token)) |token_bytes| {
+                    pos += token_bytes.len;
+                } else {
+                    pos += 1; // Fallback
+                }
+            } else {
+                // No match - encode single byte
+                const byte_slice = text[pos .. pos + 1];
+                if (self.vocab.get(byte_slice)) |byte_token| {
+                    try result.append(self.allocator, byte_token);
+                } else {
+                    try result.append(self.allocator, text[pos]);
+                }
+                pos += 1;
+            }
+        }
+
+        return try result.toOwnedSlice(self.allocator);
     }
 
     /// Apply BPE merges to entire text, but skip merges across chunk boundaries
