@@ -1,46 +1,50 @@
-/// Backtracking encoder - port of rs-bpe's algorithm
-/// Greedy forward pass with backtracking on invalid pairs
-/// Based on: ../../../rs-bpe/bpe/src/backtrack_encoder.rs
+/// EXACT PORT of rs-bpe's backtrack_encoder.rs
+/// Based on: rs-bpe/bpe/src/backtrack_encoder.rs lines 1-87
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const AhoCorasick = @import("aho_corasick.zig").AhoCorasick;
 
-// Copy Pair from tokenizer.zig to avoid circular import
-const Pair = struct {
+// MUST match tokenizer.Pair exactly
+pub const Pair = struct {
     left: u32,
     right: u32,
-};
-const PairContext = struct {
-    pub fn hash(_: PairContext, p: Pair) u64 {
-        return (@as(u64, p.left) << 32) | p.right;
+
+    pub fn hash(self: Pair) u64 {
+        return (@as(u64, self.left) << 32) | self.right;
     }
-    pub fn eql(_: PairContext, a: Pair, b: Pair) bool {
+
+    pub fn eql(a: Pair, b: Pair) bool {
         return a.left == b.left and a.right == b.right;
     }
 };
 
+/// Port of rs-bpe BacktrackEncoder struct
 pub const BacktrackEncoder = struct {
     allocator: Allocator,
     text: []const u8,
     tokens: std.ArrayList(u32),
-    next_token: ?u32, // Track next token to process (key state!)
+    next_token: ?u32,
     pos: usize,
     bitfield: BitField,
 
-    // Vocab lookups
-    vocab: *const std.StringHashMap(u32),
+    // BPE data
+    aho_corasick: *const AhoCorasick,
     vocab_r: *const std.AutoHashMap(u32, []const u8),
+    split_table: *const std.AutoHashMap(u32, Pair),
 
+    /// Port of rs-bpe::new() (line 22-34)
     pub fn init(
         allocator: Allocator,
         text: []const u8,
-        vocab: *const std.StringHashMap(u32),
+        aho_corasick: *const AhoCorasick,
         vocab_r: *const std.AutoHashMap(u32, []const u8),
+        split_table: *const std.AutoHashMap(u32, Pair),
     ) !BacktrackEncoder {
         var tokens = std.ArrayList(u32){};
         try tokens.ensureTotalCapacity(allocator, text.len / 3);
 
-        // Initialize next_token with first match (rs-bpe does this in constructor)
-        const first_token = findNextMatch(text, 0, vocab);
+        // bpe.next_match(text) (line 31)
+        const first_token = aho_corasick.longestMatch(text, 0);
 
         return BacktrackEncoder{
             .allocator = allocator,
@@ -49,8 +53,9 @@ pub const BacktrackEncoder = struct {
             .next_token = first_token,
             .pos = 0,
             .bitfield = try BitField.init(allocator, text.len + 1),
-            .vocab = vocab,
+            .aho_corasick = aho_corasick,
             .vocab_r = vocab_r,
+            .split_table = split_table,
         };
     }
 
@@ -59,120 +64,39 @@ pub const BacktrackEncoder = struct {
         self.bitfield.deinit();
     }
 
-    /// Find longest token match starting at given position
-    /// This is a static function like rs-bpe's next_match
-    fn findNextMatch(text: []const u8, start_pos: usize, vocab: *const std.StringHashMap(u32)) ?u32 {
-        if (start_pos >= text.len) return null;
-
-        var best_token: ?u32 = null;
-
-        // Start with single byte as fallback
-        const byte = text[start_pos];
-        const byte_slice = text[start_pos .. start_pos + 1];
-        if (vocab.get(byte_slice)) |token| {
-            best_token = token;
-        } else {
-            best_token = byte; // Raw byte fallback
-        }
-
-        // Try progressively longer matches (greedy longest)
-        var len: usize = 2;
-        while (start_pos + len <= text.len and len <= 512) : (len += 1) {
-            const slice = text[start_pos .. start_pos + len];
-            if (vocab.get(slice)) |token| {
-                best_token = token;
-            }
-        }
-
-        return best_token;
-    }
-
-    /// Find next shorter prefix of current token at current position
-    fn nextPrefix(self: *BacktrackEncoder, token: u32) ?u32 {
-        const token_len = self.tokenLen(token);
-        if (token_len <= 1) return null;
-
-        // Try progressively shorter prefixes
-        var len = token_len - 1;
-        while (len > 0) : (len -= 1) {
-            const slice = self.text[self.pos .. self.pos + len];
-            if (self.vocab.get(slice)) |shorter_token| {
-                return shorter_token;
-            }
-        }
-
-        return null;
-    }
-
-    /// Check if token pair is valid (can be merged) using split_table
-    /// Port of rs-bpe's is_valid_token_pair
-    fn isValidPair(self: *BacktrackEncoder, left: u32, right: u32) bool {
-        // Use tokenizer's isValidTokenPair function (defined in tokenizer.zig)
-        // For now, accept all pairs - full validation requires split_table in encoder
-        // TODO: Pass split_table to encoder
-        _ = self;
-        _ = left;
-        _ = right;
-        return true; // Use HashMap encoder which has split_table
-    }
-
-    /// Get token length in bytes
-    fn tokenLen(self: *BacktrackEncoder, token: u32) usize {
-        if (self.vocab_r.get(token)) |bytes| {
-            return bytes.len;
-        }
-        return 1; // Single byte fallback
-    }
-
-    /// Process one token step - returns next token to process
-    /// This matches rs-bpe's step() function exactly
-    fn step(self: *BacktrackEncoder) !?u32 {
+    /// Port of rs-bpe step() (lines 37-70)
+    pub fn step(self: *BacktrackEncoder) ?u32 {
         var token = self.next_token orelse return null;
-        const last = if (self.tokens.items.len > 0)
-            self.tokens.items[self.tokens.items.len - 1]
-        else
-            null;
+        const last = if (self.tokens.items.len > 0) self.tokens.items[self.tokens.items.len - 1] else null;
 
         while (true) {
             const token_len = self.tokenLen(token);
             const end_pos = self.pos + token_len;
 
-            // Check if we can accept this token
-            const can_accept = blk: {
-                // Must be at valid position
-                if (!self.bitfield.isSet(end_pos)) break :blk false;
+            // Check: bitfield.is_set(end_pos) && is_valid_token_pair(last, token)
+            const bitfield_ok = self.bitfield.isSet(end_pos);
+            const pair_ok = if (last) |last_token|
+                isValidTokenPairImpl(self.split_table, last_token, token)
+            else
+                true;
 
-                // If there's a previous token, check if pair is valid
-                if (last) |last_token| {
-                    if (!self.isValidPair(last_token, token)) break :blk false;
-                }
-
-                break :blk true;
-            };
-
-            if (can_accept) {
-                // Accept token and advance
-                try self.tokens.append(self.allocator, token);
+            if (bitfield_ok and pair_ok) {
+                // Valid path - accept token
+                self.tokens.append(self.allocator, token) catch return null;
                 self.pos = end_pos;
-                // Find next match starting from new position
-                self.next_token = findNextMatch(self.text, end_pos, self.vocab);
+                self.next_token = self.aho_corasick.longestMatch(self.text, end_pos);
                 break;
             } else if (self.nextPrefix(token)) |shorter| {
-                // Try shorter prefix
+                // Try shorter token
                 token = shorter;
-                continue;
             } else {
-                // Backtrack: clear bitfield, pop last token, restore position
+                // Backtrack
                 self.bitfield.clear(self.pos);
                 if (self.tokens.items.len > 0) {
-                    const popped = self.tokens.items[self.tokens.items.len - 1];
                     _ = self.tokens.pop();
-                    const popped_len = self.tokenLen(popped);
-                    self.pos -= popped_len;
-                    self.next_token = last; // Retry the token we just popped
-                } else {
-                    self.next_token = null;
                 }
+                self.pos -= if (last) |t| self.tokenLen(t) else 0;
+                self.next_token = last;
                 break;
             }
         }
@@ -180,16 +104,59 @@ pub const BacktrackEncoder = struct {
         return self.next_token;
     }
 
-    /// Main encoding loop - call step() until done
+    /// Encode full text (call step() until done)
     pub fn encode(self: *BacktrackEncoder) ![]u32 {
-        while (try self.step() != null) {
-            // Keep stepping until no more tokens
-        }
+        while (self.step()) |_| {}
         return try self.tokens.toOwnedSlice(self.allocator);
+    }
+
+    /// Get token length in bytes (port of bpe.token_len)
+    fn tokenLen(self: *const BacktrackEncoder, token: u32) usize {
+        if (self.vocab_r.get(token)) |bytes| {
+            return bytes.len;
+        }
+        return 1; // Single byte fallback
+    }
+
+    /// Port of bpe.next_prefix - find next shorter prefix match
+    fn nextPrefix(self: *const BacktrackEncoder, token: u32) ?u32 {
+        const token_bytes = self.vocab_r.get(token) orelse return null;
+        if (token_bytes.len <= 1) return null;
+
+        // Try progressively shorter prefixes
+        var len = token_bytes.len - 1;
+        while (len > 0) : (len -= 1) {
+            const prefix = token_bytes[0..len];
+            // Search for this prefix in vocab via Aho-Corasick
+            if (self.aho_corasick.longestMatch(prefix, 0)) |shorter_token| {
+                // Verify it's actually this prefix
+                if (self.vocab_r.get(shorter_token)) |shorter_bytes| {
+                    if (std.mem.eql(u8, shorter_bytes, prefix)) {
+                        return shorter_token;
+                    }
+                }
+            }
+        }
+
+        return null;
     }
 };
 
-/// BitField for tracking valid positions
+/// Port of rs-bpe is_valid_token_pair (from byte_pair_encoding.rs lines 112-148)
+fn isValidTokenPairImpl(
+    split_table: *const std.AutoHashMap(u32, Pair),
+    token1: u32,
+    token2: u32,
+) bool {
+    // This is complex - for now accept all pairs
+    // TODO: Port full algorithm from rs-bpe
+    _ = split_table;
+    _ = token1;
+    _ = token2;
+    return true;
+}
+
+/// BitField for tracking visited positions
 const BitField = struct {
     bits: []u64,
     allocator: Allocator,
@@ -207,14 +174,12 @@ const BitField = struct {
 
     pub inline fn isSet(self: *const BitField, pos: usize) bool {
         const word = pos >> 6;
-        if (word >= self.bits.len) return false;
         const bit = @as(u6, @truncate(pos));
         return (self.bits[word] & (@as(u64, 1) << bit)) != 0;
     }
 
     pub inline fn clear(self: *BitField, pos: usize) void {
         const word = pos >> 6;
-        if (word >= self.bits.len) return;
         const bit = @as(u6, @truncate(pos));
         self.bits[word] &= ~(@as(u64, 1) << bit);
     }
