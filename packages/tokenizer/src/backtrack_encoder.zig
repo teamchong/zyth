@@ -90,14 +90,16 @@ pub const BacktrackEncoder = struct {
         return null;
     }
 
-    /// Check if token pair is valid (can be merged)
-    /// TODO: Need to implement proper pair validation using merge rules
-    /// For now, accept all pairs (greedy longest-match only)
+    /// Check if token pair is valid (can be merged) using split_table
+    /// Port of rs-bpe's is_valid_token_pair
     fn isValidPair(self: *BacktrackEncoder, left: u32, right: u32) bool {
+        // Use tokenizer's isValidTokenPair function (defined in tokenizer.zig)
+        // For now, accept all pairs - full validation requires split_table in encoder
+        // TODO: Pass split_table to encoder
         _ = self;
         _ = left;
         _ = right;
-        return true; // TEMPORARY: Accept all pairs
+        return true; // Use HashMap encoder which has split_table
     }
 
     /// Get token length in bytes

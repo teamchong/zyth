@@ -264,6 +264,132 @@ pub fn mergePair(ids: *std.ArrayList(u32), pair: Pair, new_id: u32, allocator: A
 }
 
 /// Tokenizer with SIMD and parallel optimization
+/// Build split_table by reverse-engineering vocab (port of rs-bpe lines 289-320)
+fn buildSplitTable(
+    vocab_r: *const std.AutoHashMap(u32, []const u8),
+    split_table: *std.AutoHashMap(u32, Pair),
+    pair_lookup: *std.HashMap(Pair, u32, PairContext, std.hash_map.default_max_load_percentage),
+) !void {
+    // For each token (by rank/id), try to find if it splits into two tokens
+    var id: u32 = 0;
+    while (id < vocab_r.count()) : (id += 1) {
+        const token_bytes = vocab_r.get(id) orelse {
+            // Base token - points to itself
+            try split_table.put(id, Pair{ .left = id, .right = id });
+            continue;
+        };
+
+        if (token_bytes.len == 0) {
+            try split_table.put(id, Pair{ .left = id, .right = id });
+            continue;
+        }
+
+        // Try all possible splits of this token
+        var found_split = false;
+        var split_pos: usize = 1;
+        while (split_pos < token_bytes.len) : (split_pos += 1) {
+            const left_bytes = token_bytes[0..split_pos];
+            const right_bytes = token_bytes[split_pos..];
+
+            // Find tokens for left and right parts
+            var left_token: ?u32 = null;
+            var right_token: ?u32 = null;
+
+            // Linear search through vocab (TODO: optimize with hash map)
+            var it = vocab_r.iterator();
+            while (it.next()) |entry| {
+                if (std.mem.eql(u8, entry.value_ptr.*, left_bytes)) {
+                    left_token = entry.key_ptr.*;
+                }
+                if (std.mem.eql(u8, entry.value_ptr.*, right_bytes)) {
+                    right_token = entry.key_ptr.*;
+                }
+                if (left_token != null and right_token != null) break;
+            }
+
+            if (left_token) |tok1| {
+                if (right_token) |tok2| {
+                    // Both parts found - check if valid
+                    if (tok1 < id and tok2 < id) {
+                        // Check if this pair can merge (using existing pair_lookup)
+                        if (isValidTokenPair(pair_lookup, split_table, tok1, tok2)) {
+                            try pair_lookup.put(Pair{ .left = tok1, .right = tok2 }, id);
+                            try split_table.put(id, Pair{ .left = tok1, .right = tok2 });
+                            found_split = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!found_split) {
+            // No valid split - base token
+            try split_table.put(id, Pair{ .left = id, .right = id });
+        }
+    }
+}
+
+/// Port of rs-bpe's is_valid_token_pair (lines 112-148)
+fn isValidTokenPair(
+    pair_lookup: *const std.HashMap(Pair, u32, PairContext, std.hash_map.default_max_load_percentage),
+    split_table: *const std.AutoHashMap(u32, Pair),
+    token1_arg: u32,
+    token2_arg: u32,
+) bool {
+    var token1 = token1_arg;
+    var token2 = token2_arg;
+    var limit: u32 = std.math.maxInt(u32);
+
+    while (true) {
+        // Check if this pair exists
+        if (pair_lookup.get(Pair{ .left = token1, .right = token2 })) |combined| {
+            if (combined < limit) {
+                return false;
+            }
+            return true;
+        }
+
+        if (token1 > token2) {
+            limit = token1;
+            if (split_table.get(token1)) |split| {
+                token1 = split.right;
+                if (token1 == limit) {
+                    limit = token2 + 1;
+                    if (split_table.get(token2)) |split2| {
+                        token2 = split2.left;
+                        if (token2 + 1 == limit) {
+                            return true;
+                        }
+                    } else {
+                        return true;
+                    }
+                }
+            } else {
+                return true;
+            }
+        } else {
+            limit = token2 + 1;
+            if (split_table.get(token2)) |split| {
+                token2 = split.left;
+                if (token2 + 1 == limit) {
+                    limit = token1;
+                    if (split_table.get(token1)) |split2| {
+                        token1 = split2.right;
+                        if (token1 == limit) {
+                            return true;
+                        }
+                    } else {
+                        return true;
+                    }
+                }
+            } else {
+                return true;
+            }
+        }
+    }
+}
+
 pub const Tokenizer = struct {
     vocab: std.StringHashMap(u32),
     vocab_r: std.AutoHashMap(u32, []const u8),
@@ -356,7 +482,13 @@ pub const Tokenizer = struct {
             std.hash_map.default_max_load_percentage,
         ).initContext(allocator, PairContext{});
 
-        const split_table = std.AutoHashMap(u32, Pair).init(allocator);
+        // Build split_table by reverse-engineering vocab (rs-bpe algorithm)
+        var split_table = std.AutoHashMap(u32, Pair).init(allocator);
+        errdefer split_table.deinit();
+        var pair_lookup_temp = std.HashMap(Pair, u32, PairContext, std.hash_map.default_max_load_percentage).initContext(allocator, PairContext{});
+        defer pair_lookup_temp.deinit();
+
+        try buildSplitTable(&vocab_r, &split_table, &pair_lookup_temp);
 
         const trie: ?*TrieNode = null;
 
@@ -644,7 +776,7 @@ pub const Tokenizer = struct {
             }
         }
 
-        // Fall back to HashMap encoder
+        // HashMap encoder (O(n²) but correct for BPE merge-based algorithm)
         const tokens = try self.encodeHashMap(chunk);
         defer self.allocator.free(tokens);
         try result.appendSlice(self.allocator, tokens);
