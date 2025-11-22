@@ -495,20 +495,14 @@ pub const Tokenizer = struct {
         }
 
         const merges = std.ArrayList(Pair){};
-        const merges_map = std.HashMap(
-            Pair,
-            u32,
-            PairContext,
-            std.hash_map.default_max_load_percentage,
-        ).initContext(allocator, PairContext{});
 
         // Build split_table by reverse-engineering vocab (rs-bpe algorithm)
         var split_table = std.AutoHashMap(u32, Pair).init(allocator);
         errdefer split_table.deinit();
-        var pair_lookup_temp = std.HashMap(Pair, u32, PairContext, std.hash_map.default_max_load_percentage).initContext(allocator, PairContext{});
-        defer pair_lookup_temp.deinit();
+        var merges_map = std.HashMap(Pair, u32, PairContext, std.hash_map.default_max_load_percentage).initContext(allocator, PairContext{});
+        errdefer merges_map.deinit();
 
-        try buildSplitTable(&vocab_r, &split_table, &pair_lookup_temp);
+        try buildSplitTable(&vocab_r, &split_table, &merges_map);
 
         const trie: ?*TrieNode = null;
 
@@ -830,7 +824,7 @@ pub const Tokenizer = struct {
     fn encodeViaBacktracking(self: *Tokenizer, text: []const u8) ![]u32 {
         if (text.len == 0) return try self.allocator.alloc(u32, 0);
 
-        // Use Aho-Corasick + split_table if available
+        // Use Aho-Corasick + split_table + pair_lookup if available
         if (self.aho_corasick) |*ac| {
             var encoder = try BacktrackEncoder.init(
                 self.allocator,
@@ -838,6 +832,7 @@ pub const Tokenizer = struct {
                 ac,
                 &self.vocab_r,
                 @ptrCast(&self.split_table),
+                @ptrCast(&self.merges_map),
             );
             defer encoder.deinit();
             return try encoder.encode();

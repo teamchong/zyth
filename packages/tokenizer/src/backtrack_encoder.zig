@@ -18,6 +18,16 @@ pub const Pair = struct {
     }
 };
 
+pub const PairContext = struct {
+    pub fn hash(_: PairContext, p: Pair) u64 {
+        return p.hash();
+    }
+
+    pub fn eql(_: PairContext, a: Pair, b: Pair) bool {
+        return Pair.eql(a, b);
+    }
+};
+
 /// Port of rs-bpe BacktrackEncoder struct
 pub const BacktrackEncoder = struct {
     allocator: Allocator,
@@ -31,6 +41,7 @@ pub const BacktrackEncoder = struct {
     aho_corasick: *const AhoCorasick,
     vocab_r: *const std.AutoHashMap(u32, []const u8),
     split_table: *const std.AutoHashMap(u32, Pair),
+    pair_lookup: *const std.HashMap(Pair, u32, PairContext, std.hash_map.default_max_load_percentage),
 
     /// Port of rs-bpe::new() (line 22-34)
     pub fn init(
@@ -39,6 +50,7 @@ pub const BacktrackEncoder = struct {
         aho_corasick: *const AhoCorasick,
         vocab_r: *const std.AutoHashMap(u32, []const u8),
         split_table: *const std.AutoHashMap(u32, Pair),
+        pair_lookup: *const std.HashMap(Pair, u32, PairContext, std.hash_map.default_max_load_percentage),
     ) !BacktrackEncoder {
         var tokens = std.ArrayList(u32){};
         try tokens.ensureTotalCapacity(allocator, text.len / 3);
@@ -56,6 +68,7 @@ pub const BacktrackEncoder = struct {
             .aho_corasick = aho_corasick,
             .vocab_r = vocab_r,
             .split_table = split_table,
+            .pair_lookup = pair_lookup,
         };
     }
 
@@ -76,7 +89,7 @@ pub const BacktrackEncoder = struct {
             // Check: bitfield.is_set(end_pos) && is_valid_token_pair(last, token)
             const bitfield_ok = self.bitfield.isSet(end_pos);
             const pair_ok = if (last) |last_token|
-                isValidTokenPairImpl(self.split_table, last_token, token)
+                isValidTokenPairImpl(self.pair_lookup, self.split_table, last_token, token)
             else
                 true;
 
@@ -142,18 +155,64 @@ pub const BacktrackEncoder = struct {
     }
 };
 
-/// Port of rs-bpe is_valid_token_pair (from byte_pair_encoding.rs lines 112-148)
+/// EXACT PORT of rs-bpe is_valid_token_pair (from byte_pair_encoding.rs lines 112-148)
 fn isValidTokenPairImpl(
+    pair_lookup: *const std.HashMap(Pair, u32, PairContext, std.hash_map.default_max_load_percentage),
     split_table: *const std.AutoHashMap(u32, Pair),
-    token1: u32,
-    token2: u32,
+    token1_arg: u32,
+    token2_arg: u32,
 ) bool {
-    // This is complex - for now accept all pairs
-    // TODO: Port full algorithm from rs-bpe
-    _ = split_table;
-    _ = token1;
-    _ = token2;
-    return true;
+    var token1 = token1_arg;
+    var token2 = token2_arg;
+    var limit: u32 = std.math.maxInt(u32);
+
+    while (true) {
+        // Check if this pair exists in pair_lookup
+        if (pair_lookup.get(Pair{ .left = token1, .right = token2 })) |combined| {
+            if (combined < limit) {
+                return false;
+            }
+            return true;
+        }
+
+        if (token1 > token2) {
+            limit = token1;
+            if (split_table.get(token1)) |split| {
+                token1 = split.right;
+                if (token1 == limit) {
+                    limit = token2 + 1;
+                    if (split_table.get(token2)) |split2| {
+                        token2 = split2.left;
+                        if (token2 + 1 == limit) {
+                            return true;
+                        }
+                    } else {
+                        return true;
+                    }
+                }
+            } else {
+                return true;
+            }
+        } else {
+            limit = token2 + 1;
+            if (split_table.get(token2)) |split| {
+                token2 = split.left;
+                if (token2 + 1 == limit) {
+                    limit = token1;
+                    if (split_table.get(token1)) |split2| {
+                        token1 = split2.right;
+                        if (token1 == limit) {
+                            return true;
+                        }
+                    } else {
+                        return true;
+                    }
+                }
+            } else {
+                return true;
+            }
+        }
+    }
 }
 
 /// BitField for tracking visited positions
