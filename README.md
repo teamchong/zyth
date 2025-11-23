@@ -178,16 +178,20 @@ All benchmarks run with [hyperfine](https://github.com/sharkdp/hyperfine) on App
 - Win rate: 100% (5/5 runs beat rs-bpe)
 - System overhead: 0.033s (1.3%) - excellent!
 
-**Web/WASM Encoding (583 texts × 1000 iterations):**
+**Web/WASM Encoding (583 texts × 100 iterations):**
 
-| Library | Time | Size | Status |
-|---------|------|------|--------|
-| **PyAOT (WASM)** | **50.4ms ± 0.9ms** | **46KB** | ✅ 100% correct |
-| @anthropic-ai/tokenizer (JS) | Running... | - | - |
-| gpt-tokenizer (JS) | Running... | - | - |
-| tiktoken (Node) | Running... | - | - |
+| Library | Time | vs PyAOT | Size |
+|---------|------|----------|------|
+| **PyAOT (WASM)** | **50.2ms ± 1.2ms** | **1.00x** 🏆 | **46KB** |
+| gpt-tokenizer (JS) | 491.9ms ± 15.1ms | 9.81x slower | - |
+| @anthropic-ai/tokenizer (JS) | 4.271s ± 0.039s | 85.14x slower | - |
+| tiktoken (Node) | 5.804s ± 0.034s | 115.71x slower | - |
 
-**Note:** PyAOT WASM built with `-ORelease Small` for minimal size.
+**🎉 PyAOT is 10-115x faster than all JS/Node libraries!**
+- **85x faster than @anthropic-ai/tokenizer**
+- **116x faster than tiktoken**
+- **10x faster than gpt-tokenizer**
+- WASM built with `-OReleaseSmall` for minimal 46KB size
 
 **BPE Training (583 texts × 30 runs):**
 

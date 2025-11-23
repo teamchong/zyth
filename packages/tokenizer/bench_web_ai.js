@@ -15,9 +15,9 @@ for (const text of texts.slice(0, 10)) {
     tokenizer.encode(text);
 }
 
-// Benchmark: encode all texts 1000 times
+// Benchmark: encode all texts 100 times (reduced for slower JS libs)
 const start = Date.now();
-for (let i = 0; i < 1000; i++) {
+for (let i = 0; i < 100; i++) {
     for (const text of texts) {
         tokenizer.encode(text);
     }

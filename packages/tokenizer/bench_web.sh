@@ -4,8 +4,8 @@ set -e
 
 echo "⚡ Web/Node.js Benchmark: All 4 Libraries (realistic corpus)"
 echo "============================================================"
-echo "Encoding: 583 diverse texts (200K chars) × 1000 iterations"
-echo "Node.js startup overhead <2% with 1000 iterations"
+echo "Encoding: 583 diverse texts (200K chars) × 100 iterations"
+echo "Fair comparison: all libraries use same iteration count"
 echo ""
 
 # Generate benchmark data if needed

@@ -46,9 +46,9 @@ for (const text of texts.slice(0, 10)) {
     dealloc(textPtr, textBytes.length);
 }
 
-// Benchmark: encode all texts 100 times
+// Benchmark: encode all texts 100 times (fair comparison)
 const start = Date.now();
-for (let i = 0; i < 1000; i++) {
+for (let i = 0; i < 100; i++) {
     for (const text of texts) {
         const textBytes = new TextEncoder().encode(text);
         const textPtr = alloc(textBytes.length);
