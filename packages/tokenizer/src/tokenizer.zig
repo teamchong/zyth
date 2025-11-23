@@ -14,6 +14,7 @@ const encodeOptimized = @import("optimized_hashmap_encoder.zig").encodeOptimized
 const cl100k_splitter = @import("cl100k_splitter.zig");
 const AhoCorasick = @import("aho_corasick.zig").AhoCorasick;
 const LruCache = @import("lru_cache.zig").LruCache;
+const tokenizer_io = @import("tokenizer_io.zig");
 
 /// Select best allocator for encode_arena based on target platform
 /// Native: c_allocator (jemalloc - 2x faster, zero syscalls)
@@ -462,23 +463,12 @@ pub const Tokenizer = struct {
 
     /// Decode token IDs back to text
     pub fn decode(self: *Tokenizer, tokens: []const u32) ![]u8 {
-        var result = std.ArrayList(u8){};
-        errdefer result.deinit(self.allocator);
+        return tokenizer_io.decode(self, tokens);
+    }
 
-        for (tokens) |token_id| {
-            if (self.vocab_r.get(token_id)) |token_str| {
-                try result.appendSlice(self.allocator, token_str);
-            } else if (token_id < 256) {
-                // Raw byte
-                try result.append(self.allocator, @intCast(token_id));
-            }
-        }
-
-        // Avoid toOwnedSlice overhead - just dupe used portion
-        const items = result.items[0..result.items.len];
-        const owned = try self.allocator.dupe(u8, items);
-        result.clearRetainingCapacity();
-        return owned;
+    /// Save tokenizer to JSON file (HuggingFace-compatible format)
+    pub fn saveToFile(self: *const Tokenizer, path: []const u8) !void {
+        return tokenizer_io.saveToFile(self, path);
     }
 };
 

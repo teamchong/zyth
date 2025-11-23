@@ -41,5 +41,13 @@ pub fn main() !void {
     const end = std.time.nanoTimestamp();
     const elapsed_ms = @divFloor(end - start, 1_000_000);
 
+    // Save trained model for verification
+    std.debug.print("Saving to pyaot_trained.json...\n", .{});
+    tokenizer.saveToFile("pyaot_trained.json") catch |err| {
+        std.debug.print("ERROR saving file: {}\n", .{err});
+        return err;
+    };
+    std.debug.print("✅ Saved successfully!\n", .{});
+
     std.debug.print("{d}ms\n", .{elapsed_ms});
 }

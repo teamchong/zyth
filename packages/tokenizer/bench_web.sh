@@ -18,16 +18,14 @@ fi
 # Make scripts executable
 chmod +x bench_web_pyaot.js bench_web_ai.js bench_web_gpt.js bench_web_tiktoken.js
 
-echo "📊 Attempting to benchmark ALL 4 libraries:"
+echo "📊 Benchmarking ALL 4 libraries:"
 echo "   1. PyAOT (WASM)"
 echo "   2. @anthropic-ai/tokenizer (JS)"
 echo "   3. gpt-tokenizer (JS)"
 echo "   4. tiktoken (Node)"
 echo ""
-echo "⚠️  Note: Some may fail or be very slow"
-echo ""
 
-# Run hyperfine with ALL 4 libraries (let them fail/timeout naturally)
+# Run hyperfine with ALL 4 libraries
 hyperfine \
     --warmup 1 \
     --runs 5 \

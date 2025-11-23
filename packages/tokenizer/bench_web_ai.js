@@ -1,22 +1,25 @@
 #!/usr/bin/env node
 // @anthropic-ai/tokenizer benchmark (realistic corpus)
-import { countTokens } from '@anthropic-ai/tokenizer';
+import { getTokenizer } from '@anthropic-ai/tokenizer';
 import { readFileSync } from 'fs';
 
 // Load realistic benchmark data
 const data = JSON.parse(readFileSync('benchmark_data.json', 'utf-8'));
 const texts = data.texts;
 
+// Initialize tokenizer once (reuse for all calls)
+const tokenizer = await getTokenizer();
+
 // Warmup
 for (const text of texts.slice(0, 10)) {
-    countTokens(text);
+    tokenizer.encode(text);
 }
 
-// Benchmark: encode all texts 100 times
+// Benchmark: encode all texts 1000 times
 const start = Date.now();
 for (let i = 0; i < 1000; i++) {
     for (const text of texts) {
-        countTokens(text);
+        tokenizer.encode(text);
     }
 }
 const elapsed = Date.now() - start;

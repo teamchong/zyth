@@ -183,7 +183,7 @@ All benchmarks run with [hyperfine](https://github.com/sharkdp/hyperfine) on App
 
 | Library | Time | Size | Status |
 |---------|------|------|--------|
-| **PyAOT (WASM)** | **48.5ms** | **46KB** | ✅ 100% correct |
+| **PyAOT (WASM)** | **48.8ms** | **46KB** | ✅ 100% correct |
 | @anthropic-ai/tokenizer (JS) | TBD | TBD | - |
 | gpt-tokenizer (JS) | TBD | TBD | - |
 | tiktoken (Node) | TBD | TBD | - |
