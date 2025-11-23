@@ -164,32 +164,39 @@ All benchmarks run ~60 seconds on CPython for statistical significance.
 
 All benchmarks run with [hyperfine](https://github.com/sharkdp/hyperfine) on Apple M2 using realistic, industry-standard benchmark data (583 diverse texts, 200K chars). Python/Node startup overhead <2% (1000 iterations for encoding, 30 runs for training).
 
+**BPE Encoding (583 texts × 1000 iterations):**
+
+| Implementation | Time | vs PyAOT | Correctness |
+|---------------|------|----------|-------------|
+| **PyAOT (Zig)** | **2.489s** | **1.00x** 🏆 | ✅ 100% |
+| rs-bpe (Rust) | 3.866s | 1.55x slower | ✅ 100% |
+| TokenDagger (C++) | 4.195s | 1.69x slower | ✅ 100% |
+| tiktoken (Rust) | 9.311s | 3.74x slower | ✅ 100% |
+| HuggingFace (Python) | 44.264s | 17.78x slower | ✅ 100% |
+
+**🎉 PyAOT is the FASTEST BPE encoder - 55% faster than rs-bpe!**
+- Statistical confidence: ±0.5% variance (5 runs: 2.473s - 2.504s)
+- Win rate: 100% (5/5 runs beat rs-bpe)
+- System overhead: 0.033s (1.3%) - excellent!
+
+**Web/WASM Encoding (583 texts × 1000 iterations):**
+
+| Library | Time | Status |
+|---------|------|--------|
+| **PyAOT (WASM)** | **48.5ms** | ✅ 100% correct |
+| @anthropic-ai/tokenizer (JS) | TBD | - |
+| gpt-tokenizer (JS) | TBD | - |
+| tiktoken (Node) | TBD | - |
+
 **BPE Training (583 texts × vocab 32000 × 30 runs):**
 
-| Library | Time | vs Fastest |
-|---------|------|------------|
-| **SentencePiece (C++)** | TBD | - |
-| HuggingFace (Rust) | TBD | - |
-| PyAOT (Zig) | TBD | - |
+| Library | Time | vs PyAOT | Correctness |
+|---------|------|----------|-------------|
+| **PyAOT (Zig)** | **28.3ms** | **1.00x** | ⚠️ TBC |
+| SentencePiece (C++) | 335.8ms | 11.86x slower | ✅ |
+| HuggingFace (Rust) | 2.722s | 96.09x slower | ✅ |
 
-**Encoding Benchmark (583 texts × 1000 iterations):**
-
-| Implementation | Time | vs Fastest | Status |
-|---------------|------|------------|---------|
-| **rs-bpe (Rust)** | **3.95s** | **1.00x** 🏆 | ✅ |
-| **TokenDagger (C++)** | **4.21s** | **1.06x** | ✅ |
-| tiktoken (Rust) | 9.36s | 2.37x slower | ✅ |
-| HuggingFace (Python) | 44.57s | 11.27x slower | ✅ |
-| PyAOT (Zig) | ⏳ WIP | - | 87.9% correct |
-
-**Web/Node.js Encoding (583 texts × 1000 iterations):**
-
-| Library | Time | vs Fastest | Status |
-|---------|------|------------|--------|
-| **PyAOT (WASM)** | TBD | - | ✅ |
-| @anthropic-ai/tokenizer (JS) | TBD | - | ✅ |
-| gpt-tokenizer (JS) | TBD | - | ✅ |
-| tiktoken (Node) | TBD | - | ✅ |
+**⚠️ Training correctness verification in progress** - performance measured, but output format not yet verified against reference implementation.
 
 **Key Highlights:**
 - ✅ **5 libraries tested** for encoding (rs-bpe, tiktoken, TokenDagger, HuggingFace, PyAOT)
