@@ -60,8 +60,17 @@ pub const Lattice = struct {
     arena: ?*std.heap.ArenaAllocator,
 
     pub fn init(allocator: Allocator, sentence: []const u8, bos_id: usize, eos_id: usize) !Lattice {
+        return initWithArena(allocator, sentence, bos_id, eos_id, null);
+    }
+
+    /// Initialize lattice with optional arena allocator for node allocations
+    /// If arena is provided, all nodes will be allocated from it (faster, fewer allocations)
+    pub fn initWithArena(allocator: Allocator, sentence: []const u8, bos_id: usize, eos_id: usize, arena: ?*std.heap.ArenaAllocator) !Lattice {
         const len = sentence.len;
         const k_reserved_node_size = 16;
+
+        // Use arena for node allocations if provided, otherwise use main allocator
+        const node_allocator = if (arena) |a| a.allocator() else allocator;
 
         var nodes = std.ArrayList(*Node){};
         var begin_nodes = std.ArrayList(std.ArrayList(*Node)){};
@@ -80,13 +89,13 @@ pub const Lattice = struct {
         }
 
         // Create BOS (beginning of sentence) node
-        const bos = try allocator.create(Node);
+        const bos = try node_allocator.create(Node);
         bos.* = Node.init(bos_id, 0, 0, 0, 0.0);
         try nodes.append(allocator, bos);
         try end_nodes.items[0].append(allocator, bos);
 
         // Create EOS (end of sentence) node
-        const eos = try allocator.create(Node);
+        const eos = try node_allocator.create(Node);
         eos.* = Node.init(eos_id, 1, len, 0, 0.0);
         try nodes.append(allocator, eos);
         try begin_nodes.items[len].append(allocator, eos);
@@ -100,13 +109,17 @@ pub const Lattice = struct {
             .bos_id = bos_id,
             .eos_id = eos_id,
             .allocator = allocator,
+            .arena = arena,
         };
     }
 
     pub fn deinit(self: *Lattice) void {
-        // Free all nodes
-        for (self.nodes.items) |node| {
-            self.allocator.destroy(node);
+        // If using arena, nodes are freed automatically with arena.deinit()
+        // Otherwise, free each node individually
+        if (self.arena == null) {
+            for (self.nodes.items) |node| {
+                self.allocator.destroy(node);
+            }
         }
         self.nodes.deinit(self.allocator);
 
@@ -158,7 +171,10 @@ pub const Lattice = struct {
     /// Insert a token candidate into the lattice
     pub fn insert(self: *Lattice, pos: usize, length: usize, score: f64, id: usize) !void {
         const node_id = self.nodes.items.len;
-        const node = try self.allocator.create(Node);
+
+        // Use arena allocator if available, otherwise use main allocator
+        const node_allocator = if (self.arena) |a| a.allocator() else self.allocator;
+        const node = try node_allocator.create(Node);
         node.* = Node.init(id, node_id, pos, length, score);
 
         try self.nodes.append(self.allocator, node);

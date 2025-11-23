@@ -179,6 +179,42 @@ typedef struct PyMethodDef {
 } PyMethodDef;
 
 /* ============================================================================
+ * PYDICT OPERATIONS
+ * ============================================================================ */
+
+extern PyObject* PyDict_New(void);
+extern int64_t PyDict_Size(PyObject *dict);
+extern PyObject* PyDict_GetItem(PyObject *dict, PyObject *key);
+extern int PyDict_SetItem(PyObject *dict, PyObject *key, PyObject *value);
+extern int PyDict_DelItem(PyObject *dict, PyObject *key);
+extern void PyDict_Clear(PyObject *dict);
+extern int PyDict_Contains(PyObject *dict, PyObject *key);
+extern int PyDict_Check(PyObject *obj);
+
+/* ============================================================================
+ * PYBYTES OPERATIONS
+ * ============================================================================ */
+
+extern PyObject* PyBytes_FromString(const char *str);
+extern PyObject* PyBytes_FromStringAndSize(const char *str, int64_t len);
+extern const char* PyBytes_AsString(PyObject *obj);
+extern int64_t PyBytes_Size(PyObject *obj);
+extern int PyBytes_Check(PyObject *obj);
+extern void PyBytes_Concat(PyObject **bytes, PyObject *newpart);
+
+/* ============================================================================
+ * ERROR HANDLING
+ * ============================================================================ */
+
+extern void PyErr_SetString(PyObject *exception, const char *message);
+extern void PyErr_SetObject(PyObject *exception, PyObject *value);
+extern PyObject* PyErr_Occurred(void);
+extern void PyErr_Clear(void);
+extern void PyErr_Fetch(PyObject **ptype, PyObject **pvalue, PyObject **ptraceback);
+extern void PyErr_Restore(PyObject *type, PyObject *value, PyObject *traceback);
+extern void PyErr_Print(void);
+
+/* ============================================================================
  * COMMON SINGLETONS (TODO: Implement)
  * ============================================================================ */
 

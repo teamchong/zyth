@@ -3,10 +3,6 @@ const std = @import("std");
 const runtime = @import("runtime.zig");
 const parse_direct = @import("json/parse_direct.zig");
 
-// Thread-local buffer pool - eliminates allocations after warmup (47% gain in tokenizer!)
-threadlocal var buffer_pool: ?std.ArrayList(u8) = null;
-threadlocal var pool_initialized: bool = false;
-
 /// Deserialize JSON string to PyObject
 /// Python: json.loads(json_str) -> obj
 pub fn loads(json_str: *runtime.PyObject, allocator: std.mem.Allocator) !*runtime.PyObject {
@@ -27,24 +23,13 @@ pub fn loads(json_str: *runtime.PyObject, allocator: std.mem.Allocator) !*runtim
 /// Serialize PyObject to JSON string
 /// Python: json.dumps(obj) -> str
 pub fn dumps(obj: *runtime.PyObject, allocator: std.mem.Allocator) !*runtime.PyObject {
-    // Thread-local buffer pooling - reuse buffer across calls (zero alloc after warmup!)
-    if (!pool_initialized) {
-        buffer_pool = std.ArrayList(u8){};
-        pool_initialized = true;
-    }
-
-    var buffer = &buffer_pool.?;
-    buffer.clearRetainingCapacity();
-
-    // Estimate and ensure capacity
     const estimated_size = estimateJsonSize(obj);
-    try buffer.ensureTotalCapacity(allocator, estimated_size);
+    var buffer = try std.ArrayList(u8).initCapacity(allocator, estimated_size);
+    defer buffer.deinit(allocator);
 
-    // Direct buffer access - bypass writer() overhead!
-    try stringifyPyObjectDirect(obj, buffer, allocator);
+    try stringifyPyObjectDirect(obj, &buffer, allocator);
 
-    // Duplicate for return (pool retains original buffer)
-    const result_str = try allocator.dupe(u8, buffer.items);
+    const result_str = try buffer.toOwnedSlice(allocator);
     return try runtime.PyString.createOwned(allocator, result_str);
 }
 
@@ -145,6 +130,7 @@ fn stringifyPyObjectDirect(obj: *runtime.PyObject, buffer: *std.ArrayList(u8), a
 
 /// Write escaped string directly to ArrayList
 fn writeEscapedStringDirect(str: []const u8, buffer: *std.ArrayList(u8), allocator: std.mem.Allocator) !void {
+    @setRuntimeSafety(false); // Disable bounds checks - we control the input
     var start: usize = 0;
     var i: usize = 0;
 

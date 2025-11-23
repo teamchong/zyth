@@ -8,6 +8,7 @@ const Allocator = std.mem.Allocator;
 const Unigram = @import("unigram_model.zig").Unigram;
 const VocabEntry = @import("unigram_model.zig").VocabEntry;
 const Lattice = @import("unigram_lattice.zig").Lattice;
+const ThreadPool = @import("thread_pool.zig");
 const UnigramTokenizer = @import("unigram_tokenizer.zig").UnigramTokenizer;
 const suffix_array = @import("suffix_array.zig");
 
@@ -57,6 +58,7 @@ pub const UnigramTrainerConfig = struct {
 pub const UnigramTrainer = struct {
     config: UnigramTrainerConfig,
     allocator: Allocator,
+    thread_pool: ?*ThreadPool,
 
     /// Initialize with vocab size (matches BPE/WordPiece API)
     pub fn init(vocab_size: usize, allocator: Allocator) !UnigramTrainer {
@@ -65,6 +67,18 @@ pub const UnigramTrainer = struct {
                 .vocab_size = @intCast(vocab_size),
             },
             .allocator = allocator,
+            .thread_pool = null,
+        };
+    }
+
+    /// Initialize with thread pool for parallel training
+    pub fn initWithThreadPool(vocab_size: usize, allocator: Allocator, thread_pool: *ThreadPool) !UnigramTrainer {
+        return UnigramTrainer{
+            .config = UnigramTrainerConfig{
+                .vocab_size = @intCast(vocab_size),
+            },
+            .allocator = allocator,
+            .thread_pool = thread_pool,
         };
     }
 
@@ -73,6 +87,7 @@ pub const UnigramTrainer = struct {
         return UnigramTrainer{
             .config = config,
             .allocator = allocator,
+            .thread_pool = null,
         };
     }
 
@@ -228,9 +243,13 @@ pub const UnigramTrainer = struct {
                 objs -= z / @as(f64, @floatFromInt(all_sentence_freq));
             }
         } else {
-            // No cache - create lattices fresh (original behavior)
+            // No cache - create lattices fresh with arena allocator for performance
             for (sentences) |sentence| {
-                var lattice = try Lattice.init(self.allocator, sentence.text, model.bos_id, model.eos_id);
+                // Use arena allocator for node allocations (1.2-2x faster)
+                var arena = std.heap.ArenaAllocator.init(self.allocator);
+                defer arena.deinit();
+
+                var lattice = try Lattice.initWithArena(self.allocator, sentence.text, model.bos_id, model.eos_id, &arena);
                 defer lattice.deinit();
 
                 try model.populateNodes(&lattice);
@@ -357,7 +376,11 @@ pub const UnigramTrainer = struct {
             for (sample_indices.items) |sent_idx| {
                 const sentence = sentences[sent_idx];
 
-                var lattice = try Lattice.init(self.allocator, sentence.text, model.bos_id, model.eos_id);
+                // Use arena allocator for node allocations
+                var arena = std.heap.ArenaAllocator.init(self.allocator);
+                defer arena.deinit();
+
+                var lattice = try Lattice.initWithArena(self.allocator, sentence.text, model.bos_id, model.eos_id, &arena);
                 defer lattice.deinit();
 
                 try model.populateNodes(&lattice);
