@@ -150,22 +150,53 @@ Benchmarked with [hyperfine](https://github.com/sharkdp/hyperfine) on macOS ARM6
 
 | Language | Time | vs Rust | vs PyAOT | vs CPython |
 |:---------|-----:|--------:|---------:|-----------:|
-| **Rust 1.91** | **3.27s ± 0.01s** | **1.00x** 🏆 | 2.2x faster | 30.1x faster |
-| **Go 1.25** | **3.63s ± 0.02s** | 1.1x slower | 1.9x faster | 27.1x faster |
-| **PyAOT (Zig)** | **7.06s ± 0.05s** | 2.2x slower | **1.00x** 🚀 | **13.9x faster** |
-| CPython 3.13 | 98.42s ± 0.31s | 30.1x slower | 13.9x slower | 1.00x |
+| **Rust 1.91** | **3.27s ± 0.01s** | **1.00x** 🏆 | 2.16x faster | 30.12x faster |
+| **Go 1.25** | **3.63s ± 0.02s** | 1.11x slower | 1.94x faster | 27.12x faster |
+| **PyAOT (Zig)** | **7.06s ± 0.05s** | 2.16x slower | **1.00x** 🚀 | **13.94x faster** |
+| CPython 3.13 | 98.42s ± 0.31s | 30.12x slower | 13.94x slower | 1.00x |
 
 **Key takeaways:**
-- **PyAOT is 13.9x faster than CPython** - massive speedup for recursive algorithms
-- **2.2x slower than Rust** - competitive with systems languages
-- **1.9x slower than Go** - impressive for Python-to-native compilation
+- **PyAOT is 13.94x faster than CPython** - massive speedup for recursive algorithms
+- **2.16x slower than Rust** - competitive with systems languages
+- **1.94x slower than Go** - impressive for Python-to-native compilation
 - **Zero Python runtime** - pure native code (Rust/Go-like performance)
 
 **Performance highlights:**
 - **Fibonacci:** 8.3x faster on recursive computation
-- **JSON:** 4-9x faster (parse/stringify) - fastest library tested (beats Rust!)
+- **Tokenizer:** 1.55x faster than Rust rs-bpe (fastest BPE encoder)
+- **JSON:** Currently slower than Rust/Python on large documents - optimization in progress
 - **Startup:** 20x faster instant binary execution
 - **Range:** 4-20x speedup vs CPython depending on workload
+
+### JSON Benchmark (100K iterations × 62KB realistic JSON)
+
+All benchmarks run with [hyperfine](https://github.com/sharkdp/hyperfine) on Apple Silicon using realistic 62KB JSON document (50 users, 30 products, 31 days analytics).
+
+**JSON Parse (100K × 62KB = 6.2GB processed):**
+
+| Implementation | Time | vs Rust | Correctness |
+|---------------|------|---------|-------------|
+| **Rust (serde_json)** | **12.5s ± 0.2s** | **1.00x** 🏆 | ✅ 100% |
+| Zig (std.json) | 24.4s ± 0.7s | 1.95x slower | ✅ 100% |
+| Python (json) | 30.5s ± 0.5s | 2.44x slower | ✅ 100% |
+| Go (encoding/json) | 41.3s ± 0.2s | 3.30x slower | ✅ 100% |
+| **PyAOT** | **42.4s ± 1.0s** | **3.39x slower** | ✅ 100% |
+
+**JSON Stringify (100K × 62KB = 6.2GB processed):**
+
+| Implementation | Time | vs Rust | Correctness |
+|---------------|------|---------|-------------|
+| **Rust (serde_json)** | **5.6s ± 1.2s** | **1.00x** 🏆 | ✅ 100% |
+| Python (json) | 19.4s ± 0.1s | 3.45x slower | ✅ 100% |
+| Go (encoding/json) | 22.3s ± 0.1s | 3.96x slower | ✅ 100% |
+| **PyAOT** | **32.9s ± 0.1s** | **5.84x slower** | ✅ 100% |
+
+**Analysis:**
+- PyAOT JSON is currently slower than Rust, Zig stdlib, Python, and Go on large documents
+- JSON implementation is **100% Python-aligned** (escape sequences, key ordering)
+- Using C allocator (29x faster than GPA) and Bun's optimized string escaper
+- Performance optimization needed for large document handling
+- Small JSON documents (<1KB) show better relative performance
 
 ### Tokenizer Benchmark (Native Binary)
 
@@ -341,29 +372,30 @@ Zig's compiler analyzes which functions you **actually call** and only includes 
 
 | Pattern | Iterations | PyAOT (ms) | Rust (ms) | PyAOT/iter | Rust/iter | Winner |
 |---------|-----------|-----------|----------|------------|-----------|--------|
-| **Email** | **1M** | **96** | **94** | **0.096µs** | **0.094µs** | **Tied (1.02x)** ⚡ |
-| URL | 1M | 811 | 251 | 0.81µs | 0.25µs | Rust 3.23x faster |
-| Digits | 1M | 3,253 | 3,036 | 3.25µs | 3.04µs | Rust 1.07x faster |
-| **Date ISO** | **1M** | **351** | **634** | **0.35µs** | **0.63µs** | **PyAOT 1.81x FASTER!** 🏆 |
-| Word Boundary | 100k | 10,927 | 386 | 109.27µs | 3.86µs | Rust 28.3x faster* |
-| **TOTAL (4 patterns)** | | **4,512ms** | **4,016ms** | | | **Rust 1.12x faster** |
+| **Email** | **1M** | **97** | **92** | **0.097µs** | **0.092µs** | **Rust 1.05x faster** ⚡ |
+| URL | 1M | 809 | 248 | 0.81µs | 0.25µs | Rust 3.26x faster |
+| **Digits** | **1M** | **661** | **2,980** | **0.66µs** | **2.98µs** | **🏆 PyAOT 4.51x FASTER!!!** |
+| **Date ISO** | **1M** | **350** | **632** | **0.35µs** | **0.63µs** | **🏆 PyAOT 1.80x FASTER!** |
+| Word Boundary | 100k | 11,032 | 385 | 110.32µs | 3.85µs | Rust 28.6x faster* |
+| **TOTAL (4 patterns)** | | **1,917ms** | **3,952ms** | | | **🏆 PyAOT 2.06x FASTER!!!** |
 
 *Word Boundary uses Pike VM for correctness (lazy DFA doesn't support assertions yet)
 
-**🏆 PyAOT BEATS Rust on Date ISO, TIES on Email! 🏆**
+**🎉 PyAOT CRUSHES Rust - 2.06x FASTER Overall! 🎉**
 
 **Key Achievements:**
-- **Date ISO: PyAOT 1.81x FASTER!** (351ms vs 634ms) 🏆
-- **Email: TIED!** (96ms vs 94ms, 1.02x) ⚡
-- **Digits: Nearly tied!** (3,253ms vs 3,036ms, 1.07x) ⚡
-- **URL: 3.23x slower** (SIMD improved from 4.68x!)
-- **Overall (4 patterns): 1.12x slower** (4,512ms vs 4,016ms)
-- **Improvement: 3.2x slower → 1.12x slower = 2.86x faster overall!**
+- **🏆 Digits: PyAOT 4.51x FASTER!!!** (661ms vs 2,980ms) - SIMD digit scanning DOMINATES!
+- **🏆 Date ISO: PyAOT 1.80x FASTER!** (350ms vs 632ms) - Prefix scanning wins!
+- **⚡ Email: Very close!** (97ms vs 92ms, 1.05x slower) - Nearly tied!
+- **URL: 3.26x slower** (SIMD improved from 4.68x, but still needs work)
+- **🎯 Overall (4 patterns): PyAOT 2.06x FASTER!!!** (1,917ms vs 3,952ms)
+- **Journey: 3.2x slower → 2.06x FASTER = 6.6x total improvement!**
 
 **Key Optimizations (Exploiting Zig's advantages!):**
+- **🚀 SIMD `@Vector` for Digits**: Vectorized digit scanning (4.98x faster! 3,253ms→661ms)
+- **🚀 SIMD `@Vector` for URL**: Vectorized whitespace scanning (1.53x faster! 1,245ms→811ms)
 - **C allocator**: 4-6x faster than GPA (29x difference!)
 - **Unsafe hot loops**: `@setRuntimeSafety(false)` removes bounds checks (Rust can't do this easily!)
-- **SIMD `@Vector` for URL**: Vectorized whitespace scanning (1.53x faster on URL!)
 - **Inline hot functions**: `getTransition`, `followByte` marked inline
 - **Multi-byte prefix scanning**: `://` for URL, `-` for dates, `@` for email
 - **Pattern-specific windows**: 3-10 chars optimized per pattern
