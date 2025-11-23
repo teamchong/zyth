@@ -135,15 +135,43 @@ fn writeEscapedStringDirect(str: []const u8, buffer: *std.ArrayList(u8), allocat
             }
 
             // Write escape with @memcpy
-            const escape: []const u8 = switch (c) {
-                '"' => "\\\"",
-                '\\' => "\\\\",
-                '\x08' => "\\b",
-                '\x0C' => "\\f",
-                '\n' => "\\n",
-                '\r' => "\\r",
-                '\t' => "\\t",
-                else => blk: {
+            switch (c) {
+                '"' => {
+                    const escape = "\\\"";
+                    const slice = buffer.addManyAsSlice(allocator, escape.len) catch unreachable;
+                    @memcpy(slice, escape);
+                },
+                '\\' => {
+                    const escape = "\\\\";
+                    const slice = buffer.addManyAsSlice(allocator, escape.len) catch unreachable;
+                    @memcpy(slice, escape);
+                },
+                '\x08' => {
+                    const escape = "\\b";
+                    const slice = buffer.addManyAsSlice(allocator, escape.len) catch unreachable;
+                    @memcpy(slice, escape);
+                },
+                '\x0C' => {
+                    const escape = "\\f";
+                    const slice = buffer.addManyAsSlice(allocator, escape.len) catch unreachable;
+                    @memcpy(slice, escape);
+                },
+                '\n' => {
+                    const escape = "\\n";
+                    const slice = buffer.addManyAsSlice(allocator, escape.len) catch unreachable;
+                    @memcpy(slice, escape);
+                },
+                '\r' => {
+                    const escape = "\\r";
+                    const slice = buffer.addManyAsSlice(allocator, escape.len) catch unreachable;
+                    @memcpy(slice, escape);
+                },
+                '\t' => {
+                    const escape = "\\t";
+                    const slice = buffer.addManyAsSlice(allocator, escape.len) catch unreachable;
+                    @memcpy(slice, escape);
+                },
+                else => {
                     var buf: [6]u8 = undefined;
                     const formatted = std.fmt.bufPrint(&buf, "\\u{x:0>4}", .{c}) catch unreachable;
                     const slice = buffer.addManyAsSlice(allocator, formatted.len) catch unreachable;
@@ -151,9 +179,7 @@ fn writeEscapedStringDirect(str: []const u8, buffer: *std.ArrayList(u8), allocat
                     start = i + 1;
                     continue;
                 },
-            };
-            const slice = buffer.addManyAsSlice(allocator, escape.len) catch unreachable;
-            @memcpy(slice, escape);
+            }
             start = i + 1;
         }
     }
