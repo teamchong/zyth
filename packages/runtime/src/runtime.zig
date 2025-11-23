@@ -41,6 +41,8 @@ pub const PyObject = struct {
         tuple,
         dict,
         none,
+        numpy_array, // NumPy array support for C interop
+        regex, // Compiled regex pattern
     };
 
     /// Value type for initializing lists/tuples from literals
@@ -359,6 +361,10 @@ pub const PyString = pystring.PyString;
 // Import PyDict from separate file
 const dict_module = @import("dict.zig");
 pub const PyDict = dict_module.PyDict;
+
+// Import NumPy array support
+pub const numpy_array = @import("numpy_array.zig");
+pub const NumpyArray = numpy_array.NumpyArray;
 
 // HTTP, async, JSON, and regex modules
 pub const http = @import("http.zig");
