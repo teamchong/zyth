@@ -21,7 +21,7 @@ help:
 	@echo "  make benchmark-quick    - ⚡ Quick (3 libs, 100 iter, ~5s) - for rapid iteration"
 	@echo "  make benchmark          - Run ALL benchmarks (train + encoding + web)"
 	@echo "  make benchmark-train    - BPE training (3 libraries)"
-	@echo "  make benchmark-encoding - Encoding (5 libraries w/ TokenDagger)"
+	@echo "  make benchmark-encoding - Encoding (5 libraries w/ PyAOT, TokenDagger)"
 	@echo "  make benchmark-web      - Web/WASM benchmark (4 libraries)"
 	@echo "  make test-correctness   - Verify PyAOT matches tiktoken (583+ tests)"
 	@echo ""
@@ -52,7 +52,7 @@ benchmark-quick: build
 	@./bench_hyperfine.sh
 	@echo ""
 
-# Native encoding benchmarks (5 libraries: rs-bpe, tiktoken, TokenDagger, HuggingFace, PyAOT)
+# Native encoding benchmarks (5 libraries: PyAOT, rs-bpe, tiktoken, TokenDagger, HuggingFace)
 benchmark-encoding:
 	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(RESET)"
 	@echo "$(GREEN)🚀 Encoding Benchmark: 5 libraries$(RESET)"

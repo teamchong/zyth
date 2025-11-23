@@ -27,9 +27,13 @@ pub fn compileModule(allocator: std.mem.Allocator, module_path: []const u8, modu
 pub fn compileNotebook(allocator: std.mem.Allocator, opts: CompileOptions) !void {
     std.debug.print("Parsing notebook: {s}\n", .{opts.input_file});
 
+    // Use arena for all intermediate allocations
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
     // Parse notebook
-    var nb = try notebook.Notebook.parse(opts.input_file, allocator);
-    defer nb.deinit();
+    var nb = try notebook.Notebook.parse(opts.input_file, aa);
 
     std.debug.print("Found {d} cells\n", .{nb.cells.items.len});
 
@@ -44,8 +48,7 @@ pub fn compileNotebook(allocator: std.mem.Allocator, opts: CompileOptions) !void
     std.debug.print("Code cells: {d}\n\n", .{code_cell_count});
 
     // Combine all code cells into a single Python module (for state sharing)
-    const combined_source = try nb.combineCodeCells(allocator);
-    defer allocator.free(combined_source);
+    const combined_source = try nb.combineCodeCells(aa);
 
     if (combined_source.len == 0) {
         std.debug.print("No code cells found in notebook\n", .{});
@@ -60,7 +63,6 @@ pub fn compileNotebook(allocator: std.mem.Allocator, opts: CompileOptions) !void
         basename;
 
     // Determine output path
-    const bin_path_allocated = opts.output_file == null;
     const bin_path = opts.output_file orelse blk: {
         // Create .pyaot/ directory if it doesn't exist
         std.fs.cwd().makeDir(".pyaot") catch |err| {
@@ -69,12 +71,11 @@ pub fn compileNotebook(allocator: std.mem.Allocator, opts: CompileOptions) !void
 
         const arch = utils.getArch();
         const path = if (opts.binary)
-            try std.fmt.allocPrint(allocator, ".pyaot/{s}", .{name_no_ext})
+            try std.fmt.allocPrint(aa, ".pyaot/{s}", .{name_no_ext})
         else
-            try std.fmt.allocPrint(allocator, ".pyaot/{s}_{s}.so", .{ name_no_ext, arch });
+            try std.fmt.allocPrint(aa, ".pyaot/{s}_{s}.so", .{ name_no_ext, arch });
         break :blk path;
     };
-    defer if (bin_path_allocated) allocator.free(bin_path);
 
     // Compile combined source directly (skip temp file)
     try compilePythonSource(allocator, combined_source, bin_path, opts.mode, opts.binary);
@@ -94,19 +95,21 @@ pub fn compilePythonSource(allocator: std.mem.Allocator, source: []const u8, bin
     _ = mode; // mode not used for now (no caching for notebooks)
     _ = binary; // binary flag passed but not checked (native codegen always produces binaries)
 
+    // Use arena for all intermediate allocations
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
     // PHASE 1: Lexer - Tokenize source code
     std.debug.print("Lexing...\n", .{});
-    var lex = try lexer.Lexer.init(allocator, source);
-    defer lex.deinit();
+    var lex = try lexer.Lexer.init(aa, source);
 
     const tokens = try lex.tokenize();
-    defer allocator.free(tokens);
 
     // PHASE 2: Parser - Build AST
     std.debug.print("Parsing...\n", .{});
-    var p = parser.Parser.init(allocator, tokens);
-    var tree = try p.parse();
-    defer tree.deinit(allocator);
+    var p = parser.Parser.init(aa, tokens);
+    const tree = try p.parse();
 
     // Ensure tree is a module
     if (tree != .module) {
@@ -115,19 +118,16 @@ pub fn compilePythonSource(allocator: std.mem.Allocator, source: []const u8, bin
     }
 
     // PHASE 2.5: C Library Import Detection
-    var import_ctx = c_interop.ImportContext.init(allocator);
-    defer import_ctx.deinit();
+    var import_ctx = c_interop.ImportContext.init(aa);
     try utils.detectImports(&import_ctx, tree);
 
     // PHASE 3: Semantic Analysis - Analyze variable lifetimes and mutations
-    var semantic_info = semantic_types.SemanticInfo.init(allocator);
-    defer semantic_info.deinit();
+    var semantic_info = semantic_types.SemanticInfo.init(aa);
     _ = try lifetime_analysis.analyzeLifetimes(&semantic_info, tree, 1);
 
     // PHASE 4: Type Inference - Infer native Zig types
     std.debug.print("Inferring types...\n", .{});
-    var type_inferrer = try native_types.TypeInferrer.init(allocator);
-    defer type_inferrer.deinit();
+    var type_inferrer = try native_types.TypeInferrer.init(aa);
 
     // PHASE 4.5: Pre-compile imported modules to register function return types
     const source_file_dir_str = ".";
@@ -138,16 +138,15 @@ pub fn compilePythonSource(allocator: std.mem.Allocator, source: []const u8, bin
     for (tree.module.body) |stmt| {
         if (stmt == .import_stmt) {
             const module_name = stmt.import_stmt.module;
-            const compiled = imports_mod.compileModuleAsStruct(
+            _ = imports_mod.compileModuleAsStruct(
                 module_name,
                 source_file_dir,
-                allocator,
+                aa,
                 &type_inferrer
             ) catch |err| {
                 std.debug.print("Warning: Could not pre-compile module {s}: {}\n", .{ module_name, err });
                 continue;
             };
-            allocator.free(compiled);
         }
     }
 
@@ -155,21 +154,18 @@ pub fn compilePythonSource(allocator: std.mem.Allocator, source: []const u8, bin
 
     // PHASE 5: Native Codegen - Generate native Zig code (no PyObject overhead)
     std.debug.print("Generating native Zig code...\n", .{});
-    var native_gen = try native_codegen.NativeCodegen.init(allocator, &type_inferrer, &semantic_info);
-    defer native_gen.deinit();
+    var native_gen = try native_codegen.NativeCodegen.init(aa, &type_inferrer, &semantic_info);
 
     // Pass import context to codegen
     native_gen.setImportContext(&import_ctx);
 
     const zig_code = try native_gen.generate(tree.module);
-    defer allocator.free(zig_code);
 
     // Native codegen always produces binaries (not shared libraries)
     std.debug.print("Compiling to native binary...\n", .{});
 
     // Get C libraries collected during import processing
-    const c_libs = try native_gen.c_libraries.toOwnedSlice(allocator);
-    defer allocator.free(c_libs);
+    const c_libs = try native_gen.c_libraries.toOwnedSlice(aa);
 
     try compiler.compileZig(allocator, zig_code, bin_path, c_libs);
 }
@@ -242,7 +238,7 @@ pub fn compileFile(allocator: std.mem.Allocator, opts: CompileOptions) !void {
     // PHASE 2: Parser - Build AST
     std.debug.print("Parsing...\n", .{});
     var p = parser.Parser.init(allocator, tokens);
-    var tree = try p.parse();
+    const tree = try p.parse();
     defer tree.deinit(allocator);
 
     // Ensure tree is a module

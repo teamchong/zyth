@@ -3,18 +3,23 @@ const ast = @import("../../ast.zig");
 const core = @import("core.zig");
 const statements = @import("statements.zig");
 const expressions = @import("expressions.zig");
+const fnv_hash = @import("../../utils/fnv_hash.zig");
 
 pub const NativeType = core.NativeType;
 pub const InferError = core.InferError;
 pub const ClassInfo = core.ClassInfo;
 
+const FnvContext = fnv_hash.FnvHashContext([]const u8);
+const FnvHashMap = std.HashMap([]const u8, NativeType, FnvContext, 80);
+const FnvClassMap = std.HashMap([]const u8, ClassInfo, FnvContext, 80);
+
 /// Type inferrer - analyzes AST to determine native Zig types
 pub const TypeInferrer = struct {
     allocator: std.mem.Allocator,
     arena: *std.heap.ArenaAllocator, // Heap-allocated arena for type allocations
-    var_types: std.StringHashMap(NativeType),
-    class_fields: std.StringHashMap(ClassInfo), // class_name -> field types
-    func_return_types: std.StringHashMap(NativeType), // function_name -> return type
+    var_types: FnvHashMap,
+    class_fields: FnvClassMap, // class_name -> field types
+    func_return_types: FnvHashMap, // function_name -> return type
 
     pub fn init(allocator: std.mem.Allocator) InferError!TypeInferrer {
         // Allocate arena on heap to avoid copy issues
@@ -24,9 +29,9 @@ pub const TypeInferrer = struct {
         return TypeInferrer{
             .allocator = allocator,
             .arena = arena,
-            .var_types = std.StringHashMap(NativeType).init(allocator),
-            .class_fields = std.StringHashMap(ClassInfo).init(allocator),
-            .func_return_types = std.StringHashMap(NativeType).init(allocator),
+            .var_types = FnvHashMap.init(allocator),
+            .class_fields = FnvClassMap.init(allocator),
+            .func_return_types = FnvHashMap.init(allocator),
         };
     }
 
@@ -99,9 +104,9 @@ pub const TypeInferrer = struct {
 /// Wrapper function to adapt expressions.inferExpr signature for statements module
 fn inferExprWrapper(
     allocator: std.mem.Allocator,
-    var_types: *std.StringHashMap(NativeType),
-    class_fields: *std.StringHashMap(ClassInfo),
-    func_return_types: *std.StringHashMap(NativeType),
+    var_types: *FnvHashMap,
+    class_fields: *FnvClassMap,
+    func_return_types: *FnvHashMap,
     node: ast.Node,
 ) InferError!NativeType {
     return expressions.inferExpr(

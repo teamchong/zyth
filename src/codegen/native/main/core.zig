@@ -11,6 +11,11 @@ const SymbolTable = symbol_table_mod.SymbolTable;
 const ClassRegistry = symbol_table_mod.ClassRegistry;
 const MethodInfo = symbol_table_mod.MethodInfo;
 const import_registry = @import("../import_registry.zig");
+const fnv_hash = @import("../../../utils/fnv_hash.zig");
+
+const FnvContext = fnv_hash.FnvHashContext([]const u8);
+const FnvVoidMap = std.HashMap([]const u8, void, FnvContext, 80);
+const FnvStringMap = std.HashMap([]const u8, []const u8, FnvContext, 80);
 
 /// Error set for code generation
 pub const CodegenError = error{
@@ -50,31 +55,31 @@ pub const NativeCodegen = struct {
     lambda_functions: std.ArrayList([]const u8),
 
     // Track which variables hold closures (for .call() generation)
-    closure_vars: std.StringHashMap(void),
+    closure_vars: FnvVoidMap,
 
     // Track which variables are closure factories (return closures)
-    closure_factories: std.StringHashMap(void),
+    closure_factories: FnvVoidMap,
 
     // Track which variables hold simple lambdas (function pointers)
-    lambda_vars: std.StringHashMap(void),
+    lambda_vars: FnvVoidMap,
 
     // Variable renames for exception handling (maps original name -> renamed name)
-    var_renames: std.StringHashMap([]const u8),
+    var_renames: FnvStringMap,
 
     // Track variables hoisted from try blocks (to skip declaration in assignment)
-    hoisted_vars: std.StringHashMap(void),
+    hoisted_vars: FnvVoidMap,
 
     // Track which variables hold constant arrays (vs ArrayLists)
-    array_vars: std.StringHashMap(void),
+    array_vars: FnvVoidMap,
 
     // Track which variables hold array slices (result of slicing a constant array)
-    array_slice_vars: std.StringHashMap(void),
+    array_slice_vars: FnvVoidMap,
 
     // Track ArrayList variables (for len() -> .items.len)
-    arraylist_vars: std.StringHashMap(void),
+    arraylist_vars: FnvVoidMap,
 
     // Track which classes have mutating methods (need var instances, not const)
-    mutable_classes: std.StringHashMap(void),
+    mutable_classes: FnvVoidMap,
 
     // Compile-time evaluator for constant folding
     comptime_evaluator: comptime_eval.ComptimeEvaluator,
@@ -96,15 +101,15 @@ pub const NativeCodegen = struct {
 
     // Track from-imported functions that need allocator argument
     // Maps symbol name -> true (e.g., "loads" -> true)
-    from_import_needs_allocator: std.StringHashMap(void),
+    from_import_needs_allocator: FnvVoidMap,
 
     // Track which user-defined functions need allocator parameter
     // Maps function name -> void (e.g., "greet" -> {})
-    functions_needing_allocator: std.StringHashMap(void),
+    functions_needing_allocator: FnvVoidMap,
 
     // Track imported module names (for mymath.add() -> needs allocator)
     // Maps module name -> void (e.g., "mymath" -> {})
-    imported_modules: std.StringHashMap(void),
+    imported_modules: FnvVoidMap,
 
     // Track variable mutations (for list ArrayList vs fixed array decision)
     // Maps variable name -> mutation info
@@ -139,24 +144,24 @@ pub const NativeCodegen = struct {
             .unpack_counter = 0,
             .lambda_counter = 0,
             .lambda_functions = std.ArrayList([]const u8){},
-            .closure_vars = std.StringHashMap(void).init(allocator),
-            .closure_factories = std.StringHashMap(void).init(allocator),
-            .lambda_vars = std.StringHashMap(void).init(allocator),
-            .var_renames = std.StringHashMap([]const u8).init(allocator),
-            .hoisted_vars = std.StringHashMap(void).init(allocator),
-            .array_vars = std.StringHashMap(void).init(allocator),
-            .array_slice_vars = std.StringHashMap(void).init(allocator),
-            .arraylist_vars = std.StringHashMap(void).init(allocator),
-            .mutable_classes = std.StringHashMap(void).init(allocator),
+            .closure_vars = FnvVoidMap.init(allocator),
+            .closure_factories = FnvVoidMap.init(allocator),
+            .lambda_vars = FnvVoidMap.init(allocator),
+            .var_renames = FnvStringMap.init(allocator),
+            .hoisted_vars = FnvVoidMap.init(allocator),
+            .array_vars = FnvVoidMap.init(allocator),
+            .array_slice_vars = FnvVoidMap.init(allocator),
+            .arraylist_vars = FnvVoidMap.init(allocator),
+            .mutable_classes = FnvVoidMap.init(allocator),
             .comptime_evaluator = comptime_eval.ComptimeEvaluator.init(allocator),
             .import_ctx = null,
             .source_file_path = null,
             .decorated_functions = std.ArrayList(DecoratedFunction){},
             .import_registry = registry,
             .from_imports = std.ArrayList(FromImportInfo){},
-            .from_import_needs_allocator = std.StringHashMap(void).init(allocator),
-            .functions_needing_allocator = std.StringHashMap(void).init(allocator),
-            .imported_modules = std.StringHashMap(void).init(allocator),
+            .from_import_needs_allocator = FnvVoidMap.init(allocator),
+            .functions_needing_allocator = FnvVoidMap.init(allocator),
+            .imported_modules = FnvVoidMap.init(allocator),
             .mutation_info = null,
             .c_libraries = std.ArrayList([]const u8){},
         };

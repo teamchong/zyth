@@ -1,18 +1,23 @@
 const std = @import("std");
 const ast = @import("../../ast.zig");
 const core = @import("core.zig");
+const fnv_hash = @import("../../utils/fnv_hash.zig");
 
 pub const NativeType = core.NativeType;
 pub const InferError = core.InferError;
 pub const ClassInfo = core.ClassInfo;
 
+const FnvContext = fnv_hash.FnvHashContext([]const u8);
+const FnvHashMap = std.HashMap([]const u8, NativeType, FnvContext, 80);
+const FnvClassMap = std.HashMap([]const u8, ClassInfo, FnvContext, 80);
+
 /// Visit and analyze statement nodes to infer variable types
 pub fn visitStmt(
     allocator: std.mem.Allocator,
-    var_types: *std.StringHashMap(NativeType),
-    class_fields: *std.StringHashMap(ClassInfo),
-    func_return_types: *std.StringHashMap(NativeType),
-    inferExprFn: *const fn (allocator: std.mem.Allocator, var_types: *std.StringHashMap(NativeType), class_fields: *std.StringHashMap(ClassInfo), func_return_types: *std.StringHashMap(NativeType), node: ast.Node) InferError!NativeType,
+    var_types: *FnvHashMap,
+    class_fields: *FnvClassMap,
+    func_return_types: *FnvHashMap,
+    inferExprFn: *const fn (allocator: std.mem.Allocator, var_types: *FnvHashMap, class_fields: *FnvClassMap, func_return_types: *FnvHashMap, node: ast.Node) InferError!NativeType,
     node: ast.Node,
 ) InferError!void {
     switch (node) {
@@ -26,8 +31,8 @@ pub fn visitStmt(
         },
         .class_def => |class_def| {
             // Track class field types from __init__ parameters
-            var fields = std.StringHashMap(NativeType).init(allocator);
-            var methods = std.StringHashMap(NativeType).init(allocator);
+            var fields = FnvHashMap.init(allocator);
+            var methods = FnvHashMap.init(allocator);
 
             // Extract field types from __init__ method
             for (class_def.body) |stmt| {

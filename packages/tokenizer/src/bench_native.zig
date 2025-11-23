@@ -10,27 +10,26 @@ pub fn main() !void {
     var tokenizer = try Tokenizer.init("dist/cl100k_base_full.json", allocator);
     defer tokenizer.deinit();
 
-    const TEXT = 
-        \\The cat sat on the mat. The dog ran in the park. The bird flew in the sky. The fish swam in the sea. The snake slithered on the ground. The rabbit hopped in the field. The fox ran through the forest. The bear climbed the tree. The wolf howled at the moon. The deer grazed in the meadow.
-    ;
+    // Load benchmark data (583 texts matching Python benchmarks)
+    const benchmark_json = try std.fs.cwd().readFileAlloc(allocator, "benchmark_data.json", 10 * 1024 * 1024);
+    defer allocator.free(benchmark_json);
 
-    // Warmup
-    {
-        var i: usize = 0;
-        while (i < 100) : (i += 1) {
-            _ = try tokenizer.encode(TEXT);
+    const parsed = try std.json.parseFromSlice(
+        struct { texts: [][]const u8 },
+        allocator,
+        benchmark_json,
+        .{ .ignore_unknown_fields = true },
+    );
+    defer parsed.deinit();
+
+    const texts = parsed.value.texts;
+
+    // Benchmark: 1000 iterations over all texts (matching Python benchmarks)
+    var i: usize = 0;
+    while (i < 1000) : (i += 1) {
+        for (texts) |text| {
+            _ = try tokenizer.encode(text);
+            // Note: encode() uses arena allocation, tokens are freed by tokenizer.deinit()
         }
     }
-
-    // Benchmark
-    const iterations: usize = 60000;
-    const start = std.time.nanoTimestamp();
-    var i: usize = 0;
-    while (i < iterations) : (i += 1) {
-        _ = try tokenizer.encode(TEXT);
-    }
-    const end = std.time.nanoTimestamp();
-    const elapsed_ms = @divFloor(end - start, 1_000_000);
-
-    std.debug.print("{}ms\n", .{elapsed_ms});
 }

@@ -5,6 +5,10 @@ const core = @import("core.zig");
 const NativeCodegen = core.NativeCodegen;
 const statements = @import("../statements.zig");
 const import_resolver = @import("../../../import_resolver.zig");
+const fnv_hash = @import("../../../utils/fnv_hash.zig");
+
+const FnvContext = fnv_hash.FnvHashContext([]const u8);
+const FnvVoidMap = std.HashMap([]const u8, void, FnvContext, 80);
 
 /// Infer return type from type string
 fn inferReturnTypeFromString(
@@ -37,8 +41,14 @@ fn compileModuleAsStructWithPrefix(
     allocator: std.mem.Allocator,
     main_type_inferrer: ?*@import("../../../analysis/native_types.zig").TypeInferrer,
 ) ![]const u8 {
+    // Use arena for intermediate allocations
+    // Base allocator used for: return value and qualified_names in type_inferrer
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
     // Use import resolver to find the .py file
-    const py_path = try import_resolver.resolveImport(module_name, source_file_dir, allocator) orelse {
+    const py_path = try import_resolver.resolveImport(module_name, source_file_dir, aa) orelse {
         std.debug.print("Error: Cannot find module '{s}.py'\n", .{module_name});
         std.debug.print("Searched in: ", .{});
         if (source_file_dir) |dir| {
@@ -47,11 +57,9 @@ fn compileModuleAsStructWithPrefix(
         std.debug.print("./, examples/\n", .{});
         return error.ModuleNotFound;
     };
-    defer allocator.free(py_path);
 
     // Analyze if this is a package with submodules
-    var pkg_info = try import_resolver.analyzePackage(py_path, allocator);
-    defer pkg_info.deinit(allocator);
+    const pkg_info = try import_resolver.analyzePackage(py_path, aa);
 
     // Read source (handle both relative and absolute paths)
     const source = blk: {
@@ -62,13 +70,12 @@ fn compileModuleAsStructWithPrefix(
                 return error.ModuleNotFound;
             };
             defer file.close();
-            break :blk try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
+            break :blk try file.readToEndAlloc(aa, 10 * 1024 * 1024);
         } else {
             // Relative path
-            break :blk try std.fs.cwd().readFileAlloc(allocator, py_path, 10 * 1024 * 1024);
+            break :blk try std.fs.cwd().readFileAlloc(aa, py_path, 10 * 1024 * 1024);
         }
     };
-    defer allocator.free(source);
 
     // Lex, parse, analyze
     const lexer_mod = @import("../../../lexer.zig");
@@ -77,28 +84,22 @@ fn compileModuleAsStructWithPrefix(
     const lifetime_analysis_mod = @import("../../../analysis/lifetime.zig");
     const native_types_mod = @import("../../../analysis/native_types.zig");
 
-    var lex = try lexer_mod.Lexer.init(allocator, source);
-    defer lex.deinit();
+    var lex = try lexer_mod.Lexer.init(aa, source);
     const tokens = try lex.tokenize();
-    defer allocator.free(tokens);
 
-    var p = parser_mod.Parser.init(allocator, tokens);
-    var tree = try p.parse();
-    defer tree.deinit(allocator);
+    var p = parser_mod.Parser.init(aa, tokens);
+    const tree = try p.parse();
 
     if (tree != .module) return error.InvalidAST;
 
-    var semantic_info = semantic_types_mod.SemanticInfo.init(allocator);
-    defer semantic_info.deinit();
+    var semantic_info = semantic_types_mod.SemanticInfo.init(aa);
     _ = try lifetime_analysis_mod.analyzeLifetimes(&semantic_info, tree, 1);
 
-    var type_inferrer = try native_types_mod.TypeInferrer.init(allocator);
-    defer type_inferrer.deinit();
+    var type_inferrer = try native_types_mod.TypeInferrer.init(aa);
     try type_inferrer.analyze(tree.module);
 
     // Use full codegen to generate proper module code
-    var codegen = try NativeCodegen.init(allocator, &type_inferrer, &semantic_info);
-    defer codegen.deinit();
+    var codegen = try NativeCodegen.init(aa, &type_inferrer, &semantic_info);
 
     // Don't generate imports for inlined modules (they'll use parent scope's imports)
 
@@ -180,8 +181,7 @@ fn compileModuleAsStructWithPrefix(
                     try codegen.generateStmt(body_stmt);
                 }
 
-                const body_code = try codegen.output.toOwnedSlice(allocator);
-                defer allocator.free(body_code);
+                const body_code = try codegen.output.toOwnedSlice(aa);
 
                 // Restore original output
                 codegen.output = saved_output;
@@ -196,7 +196,7 @@ fn compileModuleAsStructWithPrefix(
                 }
 
                 // Emit the actual body
-                try codegen.output.appendSlice(allocator, body_code);
+                try codegen.output.appendSlice(aa, body_code);
 
                 codegen.dedent();
                 try codegen.emit("}\n\n");
@@ -207,22 +207,19 @@ fn compileModuleAsStructWithPrefix(
         }
     }
 
-    const module_body = try codegen.output.toOwnedSlice(allocator);
-    defer allocator.free(module_body);
+    const module_body = try codegen.output.toOwnedSlice(aa);
 
     // Compile submodules if this is a package
     var submodule_code = std.ArrayList(u8){};
-    defer submodule_code.deinit(allocator);
 
     if (pkg_info.is_package and pkg_info.submodules.len > 0) {
         for (pkg_info.submodules) |submod_name| {
             // Build path to submodule
             const submod_path = try std.fmt.allocPrint(
-                allocator,
+                aa,
                 "{s}/{s}.py",
                 .{ pkg_info.package_dir, submod_name }
             );
-            defer allocator.free(submod_path);
 
             // Check if submodule exists
             std.fs.cwd().access(submod_path, .{}) catch continue;
@@ -230,22 +227,21 @@ fn compileModuleAsStructWithPrefix(
             // Compile submodule (recursively, in case it's also a package)
             // Build full qualified prefix for submodule
             const submod_prefix = if (parent_prefix) |prefix|
-                try std.fmt.allocPrint(allocator, "{s}.{s}", .{ prefix, module_name })
+                try std.fmt.allocPrint(aa, "{s}.{s}", .{ prefix, module_name })
             else
-                try allocator.dupe(u8, module_name);
-            defer allocator.free(submod_prefix);
+                try aa.dupe(u8, module_name);
 
             const submod_struct = compileModuleAsStructWithPrefix(
                 submod_name,
                 submod_prefix,
                 pkg_info.package_dir,
-                allocator,
+                allocator,  // Recursive call uses base allocator for return value
                 main_type_inferrer
             ) catch |err| {
                 std.debug.print("Warning: Could not compile submodule {s}.{s}: {}\n", .{ module_name, submod_name, err });
                 continue;
             };
-            defer allocator.free(submod_struct);
+            defer allocator.free(submod_struct);  // Free recursive call's return value
 
             // Extract just the struct body (remove outer const declaration)
             const struct_body = blk: {
@@ -268,7 +264,7 @@ fn compileModuleAsStructWithPrefix(
             };
 
             // Add as nested struct
-            try submodule_code.writer(allocator).print(
+            try submodule_code.writer(aa).print(
                 "    pub const {s} = struct {{\n" ++
                 "{s}" ++
                 "    }};\n\n",
@@ -277,7 +273,7 @@ fn compileModuleAsStructWithPrefix(
         }
     }
 
-    // Wrap in struct with submodules
+    // Wrap in struct with submodules (use base allocator for return value)
     var struct_code = std.ArrayList(u8){};
     errdefer struct_code.deinit(allocator);
 
@@ -303,7 +299,7 @@ pub fn collectImports(
     var imports = std.ArrayList([]const u8){};
 
     // Collect unique Python module names from import statements
-    var module_names = std.StringHashMap(void).init(self.allocator);
+    var module_names = FnvVoidMap.init(self.allocator);
     defer module_names.deinit();
 
     // Clear previous from-imports

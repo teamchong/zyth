@@ -8,7 +8,12 @@ fn getBuildDir(allocator: std.mem.Allocator) ![]const u8 {
 
 /// Compile Zig source code to native binary
 pub fn compileZig(allocator: std.mem.Allocator, zig_code: []const u8, output_path: []const u8, c_libraries: []const []const u8) !void {
-    const build_dir = try getBuildDir(allocator);
+    // Use arena for all intermediate allocations
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const build_dir = try getBuildDir(aa);
 
     // Create build directory if it doesn't exist
     std.fs.cwd().makeDir(build_dir) catch |err| {
@@ -18,30 +23,27 @@ pub fn compileZig(allocator: std.mem.Allocator, zig_code: []const u8, output_pat
     // Copy runtime files to .build for import
     const runtime_files = [_][]const u8{ "runtime.zig", "pystring.zig", "pylist.zig", "dict.zig", "pyint.zig", "pyfloat.zig", "pybool.zig", "pytuple.zig", "async.zig", "http.zig", "json.zig", "string_utils.zig", "comptime_helpers.zig" };
     for (runtime_files) |file| {
-        const src_path = try std.fmt.allocPrint(allocator, "packages/runtime/src/{s}", .{file});
-        defer allocator.free(src_path);
-        const dst_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ build_dir, file });
-        defer allocator.free(dst_path);
+        const src_path = try std.fmt.allocPrint(aa, "packages/runtime/src/{s}", .{file});
+        const dst_path = try std.fmt.allocPrint(aa, "{s}/{s}", .{ build_dir, file });
 
         const src = std.fs.cwd().openFile(src_path, .{}) catch continue;
         defer src.close();
         const dst = try std.fs.cwd().createFile(dst_path, .{});
         defer dst.close();
 
-        const content = try src.readToEndAlloc(allocator, 1024 * 1024);
-        defer allocator.free(content);
+        const content = try src.readToEndAlloc(aa, 1024 * 1024);
         try dst.writeAll(content);
     }
 
     // Copy runtime subdirectories to .build
-    try copyRuntimeDir(allocator, "http", build_dir);
-    try copyRuntimeDir(allocator, "async", build_dir);
-    try copyRuntimeDir(allocator, "json", build_dir);
-    try copyRuntimeDir(allocator, "runtime", build_dir);
-    try copyRuntimeDir(allocator, "pystring", build_dir);
+    try copyRuntimeDir(aa, "http", build_dir);
+    try copyRuntimeDir(aa, "async", build_dir);
+    try copyRuntimeDir(aa, "json", build_dir);
+    try copyRuntimeDir(aa, "runtime", build_dir);
+    try copyRuntimeDir(aa, "pystring", build_dir);
 
     // Copy c_interop directory to build dir
-    try copyCInteropDir(allocator, build_dir);
+    try copyCInteropDir(aa, build_dir);
 
     // Copy any compiled modules from .build/ to per-process build dir
     if (std.fs.cwd().openDir(".build", .{ .iterate = true })) |build_iter_dir| {
@@ -50,18 +52,15 @@ pub fn compileZig(allocator: std.mem.Allocator, zig_code: []const u8, output_pat
         var walker = mut_dir.iterate();
         while (try walker.next()) |entry| {
             if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".zig")) {
-                const src_path = try std.fmt.allocPrint(allocator, ".build/{s}", .{entry.name});
-                defer allocator.free(src_path);
-                const dst_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ build_dir, entry.name });
-                defer allocator.free(dst_path);
+                const src_path = try std.fmt.allocPrint(aa, ".build/{s}", .{entry.name});
+                const dst_path = try std.fmt.allocPrint(aa, "{s}/{s}", .{ build_dir, entry.name });
 
                 const src = std.fs.cwd().openFile(src_path, .{}) catch continue;
                 defer src.close();
                 const dst = try std.fs.cwd().createFile(dst_path, .{});
                 defer dst.close();
 
-                const mod_content = try src.readToEndAlloc(allocator, 1024 * 1024);
-                defer allocator.free(mod_content);
+                const mod_content = try src.readToEndAlloc(aa, 1024 * 1024);
                 try dst.writeAll(mod_content);
             }
         }
@@ -71,8 +70,7 @@ pub fn compileZig(allocator: std.mem.Allocator, zig_code: []const u8, output_pat
     }
 
     // Write Zig code to temporary file
-    const tmp_path = try std.fmt.allocPrint(allocator, "{s}/pyaot_main_{d}.zig", .{ build_dir, std.time.milliTimestamp() });
-    defer allocator.free(tmp_path);
+    const tmp_path = try std.fmt.allocPrint(aa, "{s}/pyaot_main_{d}.zig", .{ build_dir, std.time.milliTimestamp() });
 
     // Write temp file
     const tmp_file = try std.fs.cwd().createFile(tmp_path, .{});
@@ -83,49 +81,28 @@ pub fn compileZig(allocator: std.mem.Allocator, zig_code: []const u8, output_pat
     try tmp_file.writeAll(zig_code);
 
     // Shell out to zig build-exe
-    const zig_path = try findZigBinary(allocator);
-    defer allocator.free(zig_path);
+    const zig_path = try findZigBinary(aa);
 
-    const output_flag = try std.fmt.allocPrint(allocator, "-femit-bin={s}", .{output_path});
-    defer allocator.free(output_flag);
-
-    // Get runtime path and add it to the module search path
-    const runtime_path = try std.fs.cwd().realpathAlloc(allocator, "packages/runtime/src");
-    defer allocator.free(runtime_path);
-
-    const i_flag = try std.fmt.allocPrint(allocator, "-I{s}", .{runtime_path});
-    defer allocator.free(i_flag);
+    const output_flag = try std.fmt.allocPrint(aa, "-femit-bin={s}", .{output_path});
 
     // Build argument list
     var args = std.ArrayList([]const u8){};
-    defer args.deinit(allocator);
 
-    // Track allocated flags to free later
-    var allocated_flags = std.ArrayList([]const u8){};
-    defer {
-        for (allocated_flags.items) |flag| {
-            allocator.free(flag);
-        }
-        allocated_flags.deinit(allocator);
-    }
-
-    try args.append(allocator, zig_path);
-    try args.append(allocator, "build-exe");
-    try args.append(allocator, tmp_path);
+    try args.append(aa, zig_path);
+    try args.append(aa, "build-exe");
+    try args.append(aa, tmp_path);
 
     // Add build dir to import path so @import("runtime") finds runtime.zig
-    const import_flag = try std.fmt.allocPrint(allocator, "-I{s}", .{build_dir});
-    defer allocator.free(import_flag);
-    try args.append(allocator, import_flag);
+    const import_flag = try std.fmt.allocPrint(aa, "-I{s}", .{build_dir});
+    try args.append(aa, import_flag);
 
-    try args.append(allocator, "-ODebug");
-    try args.append(allocator, "-lc");
+    try args.append(aa, "-ODebug");
+    try args.append(aa, "-lc");
 
     // Add dynamically detected C libraries
     for (c_libraries) |lib| {
-        const lib_flag = try std.fmt.allocPrint(allocator, "-l{s}", .{lib});
-        try allocated_flags.append(allocator, lib_flag);
-        try args.append(allocator, lib_flag);
+        const lib_flag = try std.fmt.allocPrint(aa, "-l{s}", .{lib});
+        try args.append(aa, lib_flag);
     }
 
     // Add BLAS linking for NumPy support (fallback if not in c_libraries)
@@ -142,26 +119,22 @@ pub fn compileZig(allocator: std.mem.Allocator, zig_code: []const u8, output_pat
     if (!has_blas) {
         if (builtin.os.tag == .macos) {
             // macOS: Use Accelerate framework (built-in BLAS)
-            try args.append(allocator, "-framework");
-            try args.append(allocator, "Accelerate");
+            try args.append(aa, "-framework");
+            try args.append(aa, "Accelerate");
         } else if (builtin.os.tag == .linux) {
             // Linux: Link with OpenBLAS or system BLAS
-            try args.append(allocator, "-lopenblas");
+            try args.append(aa, "-lopenblas");
         }
     }
 
-    try args.append(allocator, output_flag);
+    try args.append(aa, output_flag);
 
-    const argv = try args.toOwnedSlice(allocator);
-    defer allocator.free(argv);
+    const argv = try args.toOwnedSlice(aa);
 
     const result = try std.process.Child.run(.{
-        .allocator = allocator,
+        .allocator = aa,
         .argv = argv,
     });
-    // Child.run always allocates stdout/stderr, must free them
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
 
     if (result.term.Exited != 0) {
         std.debug.print("Zig compilation failed:\n{s}\n", .{result.stderr});

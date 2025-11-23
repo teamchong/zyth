@@ -1,17 +1,22 @@
 const std = @import("std");
 const ast = @import("../../ast.zig");
 const core = @import("core.zig");
+const fnv_hash = @import("../../utils/fnv_hash.zig");
 
 pub const NativeType = core.NativeType;
 pub const InferError = core.InferError;
 pub const ClassInfo = core.ClassInfo;
 
+const FnvContext = fnv_hash.FnvHashContext([]const u8);
+const FnvHashMap = std.HashMap([]const u8, NativeType, FnvContext, 80);
+const FnvClassMap = std.HashMap([]const u8, ClassInfo, FnvContext, 80);
+
 /// Infer the native type of an expression node
 pub fn inferExpr(
     allocator: std.mem.Allocator,
-    var_types: *std.StringHashMap(NativeType),
-    class_fields: *std.StringHashMap(ClassInfo),
-    func_return_types: *std.StringHashMap(NativeType),
+    var_types: *FnvHashMap,
+    class_fields: *FnvClassMap,
+    func_return_types: *FnvHashMap,
     node: ast.Node,
 ) InferError!NativeType {
     return switch (node) {
@@ -217,9 +222,9 @@ fn inferConstant(value: ast.Value) InferError!NativeType {
 /// Infer type from binary operation
 fn inferBinOp(
     allocator: std.mem.Allocator,
-    var_types: *std.StringHashMap(NativeType),
-    class_fields: *std.StringHashMap(ClassInfo),
-    func_return_types: *std.StringHashMap(NativeType),
+    var_types: *FnvHashMap,
+    class_fields: *FnvClassMap,
+    func_return_types: *FnvHashMap,
     binop: ast.Node.BinOp,
 ) InferError!NativeType {
     const left_type = try inferExpr(allocator, var_types, class_fields, func_return_types, binop.left.*);
@@ -263,9 +268,9 @@ fn inferBinOp(
 /// Infer type from function/method call
 fn inferCall(
     allocator: std.mem.Allocator,
-    var_types: *std.StringHashMap(NativeType),
-    class_fields: *std.StringHashMap(ClassInfo),
-    func_return_types: *std.StringHashMap(NativeType),
+    var_types: *FnvHashMap,
+    class_fields: *FnvClassMap,
+    func_return_types: *FnvHashMap,
     call: ast.Node.Call,
 ) InferError!NativeType {
     // Check if this is a registered function (lambda or regular function)

@@ -220,7 +220,11 @@ pub fn pythonTypeHintToNative(type_hint: ?[]const u8, allocator: std.mem.Allocat
 }
 
 /// Class field and method information
+const fnv_hash = @import("../../utils/fnv_hash.zig");
+const FnvContext = fnv_hash.FnvHashContext([]const u8);
+const FnvTypeMap = std.HashMap([]const u8, NativeType, FnvContext, 80);
+
 pub const ClassInfo = struct {
-    fields: std.StringHashMap(NativeType),
-    methods: std.StringHashMap(NativeType), // method_name -> return type
+    fields: FnvTypeMap,
+    methods: FnvTypeMap, // method_name -> return type
 };

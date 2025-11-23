@@ -3,6 +3,12 @@
 const std = @import("std");
 const ast = @import("../../ast.zig");
 const NativeType = @import("../../analysis/native_types.zig").NativeType;
+const fnv_hash = @import("../../utils/fnv_hash.zig");
+
+const FnvContext = fnv_hash.FnvHashContext([]const u8);
+const FnvSymbolMap = std.HashMap([]const u8, SymbolInfo, FnvContext, 80);
+const FnvClassDefMap = std.HashMap([]const u8, ast.Node.ClassDef, FnvContext, 80);
+const FnvStringMap = std.HashMap([]const u8, []const u8, FnvContext, 80);
 
 /// Symbol information
 pub const SymbolInfo = struct {
@@ -19,13 +25,13 @@ pub const SymbolTable = struct {
     allocator: std.mem.Allocator,
 
     // Stack of scopes: scopes[0] = global, scopes[n] = current
-    scopes: std.ArrayList(std.StringHashMap(SymbolInfo)),
+    scopes: std.ArrayList(FnvSymbolMap),
 
     pub fn init(allocator: std.mem.Allocator) SymbolTable {
-        var scopes = std.ArrayList(std.StringHashMap(SymbolInfo)){};
+        var scopes = std.ArrayList(FnvSymbolMap){};
 
         // Initialize with global scope
-        const global = std.StringHashMap(SymbolInfo).init(allocator);
+        const global = FnvSymbolMap.init(allocator);
         scopes.append(allocator, global) catch unreachable;
 
         return SymbolTable{
@@ -44,7 +50,7 @@ pub const SymbolTable = struct {
 
     /// Push a new scope
     pub fn pushScope(self: *SymbolTable) !void {
-        const scope = std.StringHashMap(SymbolInfo).init(self.allocator);
+        const scope = FnvSymbolMap.init(self.allocator);
         try self.scopes.append(self.allocator, scope);
     }
 
@@ -131,16 +137,16 @@ pub const ClassRegistry = struct {
     allocator: std.mem.Allocator,
 
     // Maps class name → ClassDef
-    classes: std.StringHashMap(ast.Node.ClassDef),
+    classes: FnvClassDefMap,
 
     // Maps class name → parent class name (for inheritance)
-    inheritance: std.StringHashMap([]const u8),
+    inheritance: FnvStringMap,
 
     pub fn init(allocator: std.mem.Allocator) ClassRegistry {
         return ClassRegistry{
             .allocator = allocator,
-            .classes = std.StringHashMap(ast.Node.ClassDef).init(allocator),
-            .inheritance = std.StringHashMap([]const u8).init(allocator),
+            .classes = FnvClassDefMap.init(allocator),
+            .inheritance = FnvStringMap.init(allocator),
         };
     }
 
@@ -254,7 +260,7 @@ pub const ClassRegistry = struct {
     }
 
     /// Get iterator over all registered classes
-    pub fn iterator(self: *ClassRegistry) std.StringHashMap(ast.Node.ClassDef).Iterator {
+    pub fn iterator(self: *ClassRegistry) FnvClassDefMap.Iterator {
         return self.classes.iterator();
     }
 };

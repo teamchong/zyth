@@ -3,9 +3,13 @@ const std = @import("std");
 const ast = @import("../../../ast.zig");
 const NativeCodegen = @import("../main.zig").NativeCodegen;
 const CodegenError = @import("../main.zig").CodegenError;
+const fnv_hash = @import("../../../utils/fnv_hash.zig");
+
+const FnvContext = fnv_hash.FnvHashContext([]const u8);
+const FnvVoidMap = std.HashMap([]const u8, void, FnvContext, 80);
 
 /// Find all variable names referenced in an expression
-fn findReferencedVarsInExpr(expr: ast.Node, vars: *std.StringHashMap(void), allocator: std.mem.Allocator) !void {
+fn findReferencedVarsInExpr(expr: ast.Node, vars: *FnvVoidMap, allocator: std.mem.Allocator) !void {
     switch (expr) {
         .name => |name_node| {
             try vars.put(name_node.id, {});
@@ -56,7 +60,7 @@ fn findReferencedVarsInExpr(expr: ast.Node, vars: *std.StringHashMap(void), allo
 }
 
 /// Find all variable names referenced in statements
-fn findReferencedVarsInStmts(stmts: []ast.Node, vars: *std.StringHashMap(void), allocator: std.mem.Allocator) CodegenError!void {
+fn findReferencedVarsInStmts(stmts: []ast.Node, vars: *FnvVoidMap, allocator: std.mem.Allocator) CodegenError!void {
     for (stmts) |stmt| {
         switch (stmt) {
             .assign => |assign| {
@@ -140,14 +144,14 @@ pub fn genTry(self: *NativeCodegen, try_node: ast.Node.Try) CodegenError!void {
         var captured_vars = std.ArrayList([]const u8){};
         defer captured_vars.deinit(self.allocator);
 
-        var declared_var_set = std.StringHashMap(void).init(self.allocator);
+        var declared_var_set = FnvVoidMap.init(self.allocator);
         defer declared_var_set.deinit();
         for (declared_vars.items) |var_name| {
             try declared_var_set.put(var_name, {});
         }
 
         // Find variables actually referenced in try block body (not just declared)
-        var referenced_vars = std.StringHashMap(void).init(self.allocator);
+        var referenced_vars = FnvVoidMap.init(self.allocator);
         defer referenced_vars.deinit();
         try findReferencedVarsInStmts(try_node.body, &referenced_vars, self.allocator);
 
