@@ -43,152 +43,116 @@ const JSON_TRUE = "true";
 const JSON_FALSE = "false";
 const JSON_ZERO = "0.0";
 
+/// Comptime lookup table for escape detection (much faster than switch!)
+const NEEDS_ESCAPE: [256]bool = blk: {
+    var table: [256]bool = [_]bool{false} ** 256;
+    table['"'] = true;
+    table['\\'] = true;
+    table['\x08'] = true;
+    table['\x0C'] = true;
+    table['\n'] = true;
+    table['\r'] = true;
+    table['\t'] = true;
+    // Control characters 0x00-0x1F
+    var i: u8 = 0;
+    while (i <= 0x1F) : (i += 1) {
+        table[i] = true;
+    }
+    break :blk table;
+};
+
 /// Direct stringify - writes to ArrayList without writer() overhead
 fn stringifyPyObjectDirect(obj: *runtime.PyObject, buffer: *std.ArrayList(u8), allocator: std.mem.Allocator) !void {
-    // Cache type_id to reduce pointer chasing
-    const type_id = obj.type_id;
-    switch (type_id) {
-        .none => {
-            // Unsafe direct write - we pre-allocated so capacity is guaranteed
-            const slice = buffer.addManyAsSlice(allocator, JSON_NULL.len) catch unreachable;
-            @memcpy(slice, JSON_NULL);
-        },
+    switch (obj.type_id) {
+        .none => try buffer.appendSlice(allocator, JSON_NULL),
         .bool => {
             const data: *runtime.PyInt = @ptrCast(@alignCast(obj.data));
-            const str = if (data.value != 0) JSON_TRUE else JSON_FALSE;
-            const slice = buffer.addManyAsSlice(allocator, str.len) catch unreachable;
-            @memcpy(slice, str);
+            try buffer.appendSlice(allocator, if (data.value != 0) JSON_TRUE else JSON_FALSE);
         },
         .int => {
             const data: *runtime.PyInt = @ptrCast(@alignCast(obj.data));
             var buf: [32]u8 = undefined;
             const formatted = std.fmt.bufPrint(&buf, "{d}", .{data.value}) catch unreachable;
-            const slice = buffer.addManyAsSlice(allocator, formatted.len) catch unreachable;
-            @memcpy(slice, formatted);
+            try buffer.appendSlice(allocator, formatted);
         },
-        .float => {
-            const slice = buffer.addManyAsSlice(allocator, JSON_ZERO.len) catch unreachable;
-            @memcpy(slice, JSON_ZERO);
-        },
+        .float => try buffer.appendSlice(allocator, JSON_ZERO),
         .string => {
             const data: *runtime.PyString = @ptrCast(@alignCast(obj.data));
-            (buffer.addManyAsSlice(allocator, 1) catch unreachable)[0] = '"';
+            try buffer.append(allocator, '"');
             try writeEscapedStringDirect(data.data, buffer, allocator);
-            (buffer.addManyAsSlice(allocator, 1) catch unreachable)[0] = '"';
+            try buffer.append(allocator, '"');
         },
         .list => {
             const data: *runtime.PyList = @ptrCast(@alignCast(obj.data));
-            (buffer.addManyAsSlice(allocator, 1) catch unreachable)[0] = '[';
+            try buffer.append(allocator, '[');
             for (data.items.items, 0..) |item, i| {
-                if (i > 0) (buffer.addManyAsSlice(allocator, 1) catch unreachable)[0] = ',';
+                if (i > 0) try buffer.append(allocator, ',');
                 try stringifyPyObjectDirect(item, buffer, allocator);
             }
-            (buffer.addManyAsSlice(allocator, 1) catch unreachable)[0] = ']';
+            try buffer.append(allocator, ']');
         },
         .tuple => {
             const data: *runtime.PyTuple = @ptrCast(@alignCast(obj.data));
-            (buffer.addManyAsSlice(allocator, 1) catch unreachable)[0] = '[';
+            try buffer.append(allocator, '[');
             for (data.items, 0..) |item, i| {
-                if (i > 0) (buffer.addManyAsSlice(allocator, 1) catch unreachable)[0] = ',';
+                if (i > 0) try buffer.append(allocator, ',');
                 try stringifyPyObjectDirect(item, buffer, allocator);
             }
-            (buffer.addManyAsSlice(allocator, 1) catch unreachable)[0] = ']';
+            try buffer.append(allocator, ']');
         },
         .dict => {
             const data: *runtime.PyDict = @ptrCast(@alignCast(obj.data));
-            (buffer.addManyAsSlice(allocator, 1) catch unreachable)[0] = '{';
+            try buffer.append(allocator, '{');
             var it = data.map.iterator();
             var first = true;
             while (it.next()) |entry| {
-                if (!first) (buffer.addManyAsSlice(allocator, 1) catch unreachable)[0] = ',';
+                if (!first) try buffer.append(allocator, ',');
                 first = false;
-                (buffer.addManyAsSlice(allocator, 1) catch unreachable)[0] = '"';
+                try buffer.append(allocator, '"');
                 try writeEscapedStringDirect(entry.key_ptr.*, buffer, allocator);
-                (buffer.addManyAsSlice(allocator, 1) catch unreachable)[0] = '"';
-                (buffer.addManyAsSlice(allocator, 1) catch unreachable)[0] = ':';
+                try buffer.append(allocator, '"');
+                try buffer.append(allocator, ':');
                 try stringifyPyObjectDirect(entry.value_ptr.*, buffer, allocator);
             }
-            (buffer.addManyAsSlice(allocator, 1) catch unreachable)[0] = '}';
+            try buffer.append(allocator, '}');
         },
     }
 }
 
-/// Write escaped string directly to ArrayList - using @memcpy for speed
+/// Write escaped string directly to ArrayList
 fn writeEscapedStringDirect(str: []const u8, buffer: *std.ArrayList(u8), allocator: std.mem.Allocator) !void {
     var start: usize = 0;
     var i: usize = 0;
 
     while (i < str.len) : (i += 1) {
         const c = str[i];
-        const needs_escape = switch (c) {
-            '"', '\\', '\x08', '\x0C', '\n', '\r', '\t' => true,
-            0x00...0x07, 0x0B, 0x0E...0x1F => true,
-            else => false,
-        };
-
-        if (needs_escape) {
-            // Flush clean segment with @memcpy
+        // Lookup table is faster than switch!
+        if (NEEDS_ESCAPE[c]) {
             if (start < i) {
-                const len = i - start;
-                const slice = buffer.addManyAsSlice(allocator, len) catch unreachable;
-                @memcpy(slice, str[start..i]);
+                try buffer.appendSlice(allocator, str[start..i]);
             }
 
-            // Write escape with @memcpy
             switch (c) {
-                '"' => {
-                    const escape = "\\\"";
-                    const slice = buffer.addManyAsSlice(allocator, escape.len) catch unreachable;
-                    @memcpy(slice, escape);
-                },
-                '\\' => {
-                    const escape = "\\\\";
-                    const slice = buffer.addManyAsSlice(allocator, escape.len) catch unreachable;
-                    @memcpy(slice, escape);
-                },
-                '\x08' => {
-                    const escape = "\\b";
-                    const slice = buffer.addManyAsSlice(allocator, escape.len) catch unreachable;
-                    @memcpy(slice, escape);
-                },
-                '\x0C' => {
-                    const escape = "\\f";
-                    const slice = buffer.addManyAsSlice(allocator, escape.len) catch unreachable;
-                    @memcpy(slice, escape);
-                },
-                '\n' => {
-                    const escape = "\\n";
-                    const slice = buffer.addManyAsSlice(allocator, escape.len) catch unreachable;
-                    @memcpy(slice, escape);
-                },
-                '\r' => {
-                    const escape = "\\r";
-                    const slice = buffer.addManyAsSlice(allocator, escape.len) catch unreachable;
-                    @memcpy(slice, escape);
-                },
-                '\t' => {
-                    const escape = "\\t";
-                    const slice = buffer.addManyAsSlice(allocator, escape.len) catch unreachable;
-                    @memcpy(slice, escape);
-                },
+                '"' => try buffer.appendSlice(allocator, "\\\""),
+                '\\' => try buffer.appendSlice(allocator, "\\\\"),
+                '\x08' => try buffer.appendSlice(allocator, "\\b"),
+                '\x0C' => try buffer.appendSlice(allocator, "\\f"),
+                '\n' => try buffer.appendSlice(allocator, "\\n"),
+                '\r' => try buffer.appendSlice(allocator, "\\r"),
+                '\t' => try buffer.appendSlice(allocator, "\\t"),
                 else => {
                     var buf: [6]u8 = undefined;
                     const formatted = std.fmt.bufPrint(&buf, "\\u{x:0>4}", .{c}) catch unreachable;
-                    const slice = buffer.addManyAsSlice(allocator, formatted.len) catch unreachable;
-                    @memcpy(slice, formatted);
-                    start = i + 1;
-                    continue;
+                    try buffer.appendSlice(allocator, formatted);
                 },
             }
+
             start = i + 1;
         }
     }
 
-    // Flush remaining with @memcpy
     if (start < str.len) {
-        const len = str.len - start;
-        const slice = buffer.addManyAsSlice(allocator, len) catch unreachable;
-        @memcpy(slice, str[start..]);
+        try buffer.appendSlice(allocator, str[start..]);
     }
 }
 
