@@ -8,7 +8,7 @@ const Allocator = std.mem.Allocator;
 const Unigram = @import("unigram_model.zig").Unigram;
 const VocabEntry = @import("unigram_model.zig").VocabEntry;
 const Lattice = @import("unigram_lattice.zig").Lattice;
-const ThreadPool = @import("thread_pool.zig");
+const ThreadPool = @import("../../threading/src/ThreadPool.zig");
 const UnigramTokenizer = @import("unigram_tokenizer.zig").UnigramTokenizer;
 const suffix_array = @import("suffix_array.zig");
 
@@ -214,6 +214,54 @@ pub const UnigramTrainer = struct {
         return pieces;
     }
 
+    /// Parallel E-step task context
+    const EStepTask = struct {
+        task: ThreadPool.Task,
+        trainer: *UnigramTrainer,
+        model: *const Unigram,
+        sentences: []const Sentence,
+        all_sentence_freq: u32,
+
+        // Results (thread-local)
+        expected: []f64,  // Pre-allocated array for this thread
+        objs: f64,
+        err: ?anyerror,
+
+        pub fn callback(task: *ThreadPool.Task) void {
+            const self: *EStepTask = @fieldParentPtr("task", task);
+            self.processChunk() catch |e| {
+                self.err = e;
+            };
+        }
+
+        fn processChunk(self: *EStepTask) !void {
+            // Process all sentences in this chunk
+            for (self.sentences) |sentence| {
+                // Use arena allocator for node allocations
+                var arena = std.heap.ArenaAllocator.init(self.trainer.allocator);
+                defer arena.deinit();
+
+                var lattice = try Lattice.initWithArena(
+                    self.trainer.allocator,
+                    sentence.text,
+                    self.model.bos_id,
+                    self.model.eos_id,
+                    &arena,
+                );
+                defer lattice.deinit();
+
+                try self.model.populateNodes(&lattice);
+
+                const z = try lattice.populateMarginal(@floatFromInt(sentence.count), self.expected);
+                if (std.math.isNan(z)) {
+                    return error.NanLikelihood;
+                }
+
+                self.objs -= z / @as(f64, @floatFromInt(self.all_sentence_freq));
+            }
+        }
+    };
+
     /// E-step: Compute expected counts using forward-backward algorithm
     /// Uses cached lattices if provided (massive speedup)
     fn runEStep(self: *UnigramTrainer, model: *const Unigram, sentences: []const Sentence, cached_lattices: ?[]Lattice) !struct { f64, []f64 } {
@@ -223,6 +271,12 @@ pub const UnigramTrainer = struct {
             break :blk sum;
         };
 
+        // If thread pool available, use parallel processing
+        if (self.thread_pool) |pool| {
+            return try self.runEStepParallel(model, sentences, all_sentence_freq, pool);
+        }
+
+        // Sequential version (original)
         const expected = try self.allocator.alloc(f64, model.vocab.len);
         @memset(expected, 0.0);
 
@@ -264,6 +318,91 @@ pub const UnigramTrainer = struct {
         }
 
         return .{ objs, expected };
+    }
+
+    /// Parallel E-step implementation
+    fn runEStepParallel(
+        self: *UnigramTrainer,
+        model: *const Unigram,
+        sentences: []const Sentence,
+        all_sentence_freq: u32,
+        pool: *ThreadPool,
+    ) !struct { f64, []f64 } {
+        const cpu_count = try std.Thread.getCpuCount();
+        const num_threads = @min(cpu_count, 8); // Cap at 8 threads
+        const chunk_size = @max(1, sentences.len / num_threads);
+
+        // Allocate per-thread expected arrays
+        const thread_expected = try self.allocator.alloc([]f64, num_threads);
+        defer {
+            for (thread_expected) |exp| {
+                self.allocator.free(exp);
+            }
+            self.allocator.free(thread_expected);
+        }
+
+        for (thread_expected) |*exp| {
+            exp.* = try self.allocator.alloc(f64, model.vocab.len);
+            @memset(exp.*, 0.0);
+        }
+
+        // Allocate tasks
+        const tasks = try self.allocator.alloc(EStepTask, num_threads);
+        defer self.allocator.free(tasks);
+
+        // Create batch for thread pool
+        var batch = ThreadPool.Batch{};
+
+        // Split sentences into chunks and create tasks
+        var thread_idx: usize = 0;
+        var sent_idx: usize = 0;
+        while (thread_idx < num_threads) : (thread_idx += 1) {
+            const start = sent_idx;
+            const end = @min(start + chunk_size, sentences.len);
+            if (start >= sentences.len) break;
+
+            tasks[thread_idx] = EStepTask{
+                .task = ThreadPool.Task{ .callback = EStepTask.callback },
+                .trainer = self,
+                .model = model,
+                .sentences = sentences[start..end],
+                .all_sentence_freq = all_sentence_freq,
+                .expected = thread_expected[thread_idx],
+                .objs = 0.0,
+                .err = null,
+            };
+
+            batch.push(ThreadPool.Batch{
+                .len = 1,
+                .head = &tasks[thread_idx].task,
+                .tail = &tasks[thread_idx].task,
+            });
+
+            sent_idx = end;
+        }
+
+        // Schedule and wait for all tasks
+        pool.schedule(batch);
+        pool.waitForAll();
+
+        // Check for errors
+        for (tasks[0..thread_idx]) |*task| {
+            if (task.err) |e| return e;
+        }
+
+        // Merge results (reduce)
+        var total_expected = try self.allocator.alloc(f64, model.vocab.len);
+        @memset(total_expected, 0.0);
+
+        var total_objs: f64 = 0.0;
+        for (tasks[0..thread_idx]) |*task| {
+            total_objs += task.objs;
+            for (task.expected, 0..) |exp_val, i| {
+                total_expected[i] += exp_val;
+            }
+        }
+
+        return .{ total_objs, total_expected };
     }
 
     /// M-step: Update probabilities from expected counts
